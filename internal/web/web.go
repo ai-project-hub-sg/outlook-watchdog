@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -679,9 +680,32 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings?flash="+urlq("密码已更新"), 303)
 }
 
+// chRow 通道视图：附脱敏路由描述（smtp=user@host→to，webhook=host）。
+type chRow struct {
+	*store.Channel
+	Route string
+}
+
+func channelRoute(ch *store.Channel) string {
+	switch ch.Type {
+	case "smtp":
+		return maskForTpl(ch.Config["user"]) + "@" + ch.Config["host"] + ":" + ch.Config["port"] +
+			" → " + maskEmailsInText(ch.Config["to"])
+	case "webhook":
+		if u, err := url.Parse(ch.Config["url"]); err == nil {
+			return u.Host
+		}
+	}
+	return "—"
+}
+
 func (s *Server) pageChannels(w http.ResponseWriter, r *http.Request) {
 	chs, _ := s.db.ListChannels(r.Context(), false)
-	s.render(w, r, "channels", map[string]any{"Channels": chs})
+	rows := make([]chRow, 0, len(chs))
+	for _, ch := range chs {
+		rows = append(rows, chRow{ch, channelRoute(ch)})
+	}
+	s.render(w, r, "channels", map[string]any{"Channels": rows})
 }
 
 func (s *Server) handleAddChannel(w http.ResponseWriter, r *http.Request) {
@@ -731,10 +755,24 @@ func (s *Server) handleTestChannel(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.FormValue("id"), 10, 64)
 	err := sendTest(r.Context(), s.db, id)
 	msg := "测试发送成功"
+	if route := s.channelRouteByID(r, id); route != "" {
+		msg += "：" + route
+	}
 	if err != nil {
 		msg = "发送失败: " + err.Error()
 	}
 	http.Redirect(w, r, "/channels?flash="+urlq(msg), 303)
+}
+
+// channelRouteByID 查询通道并生成脱敏路由描述（供测试/删除后回显）。
+func (s *Server) channelRouteByID(r *http.Request, id int64) string {
+	chs, _ := s.db.ListChannels(r.Context(), false)
+	for _, ch := range chs {
+		if ch.ID == id {
+			return channelRoute(ch)
+		}
+	}
+	return ""
 }
 
 // ---- device flow（网页授权向导；RT 仅服务端持有）----

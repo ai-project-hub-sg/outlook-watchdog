@@ -31,16 +31,16 @@
 
 <h2>通道列表</h2>
 <table>
-<tr><th>ID</th><th>类型</th><th>名称</th><th>启用</th><th></th></tr>
+<tr><th>ID</th><th>类型</th><th>名称</th><th>路由（脱敏）</th><th>启用</th><th></th></tr>
 {{range .Data.Channels}}
 <tr>
-<td class="dim">{{.ID}}</td><td>{{.Type}}</td><td>{{.Name}}</td><td>{{.Enabled}}</td>
+<td class="dim">{{.ID}}</td><td>{{.Type}}</td><td>{{.Name}}</td><td class="mono">{{.Route}}</td><td>{{.Enabled}}</td>
 <td class="row">
 <form method="post" action="/channels/test" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="link">测试</button></form>
 <form method="post" action="/channels/delete" class="inline" onsubmit="return confirm('删除通道？')"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="link bad">删除</button></form>
 </td>
 </tr>
-{{else}}<tr><td colspan="5" class="dim">无通道</td></tr>
+{{else}}<tr><td colspan="6" class="dim">无通道</td></tr>
 {{end}}
 </table>
 <p class="dim">通道敏感字段（密码/token）不在页面展示。</p>
