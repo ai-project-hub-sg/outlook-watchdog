@@ -23,6 +23,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"outlook-watchdog/internal/check"
+	"outlook-watchdog/internal/msauth"
 	"outlook-watchdog/internal/sched"
 	"outlook-watchdog/internal/store"
 )
@@ -50,7 +51,18 @@ type Server struct {
 	started time.Time
 
 	mu      sync.Mutex
-	failIPs map[string][]time.Time // 登录限速
+	failIPs map[string][]time.Time  // 登录限速
+	pending map[string]*pendingFlow // device flow 进行中的授权（RT 不出服务端）
+}
+
+// pendingFlow 跟踪一次 device code 授权；RT 仅存在服务端内存，不进 HTML。
+type pendingFlow struct {
+	ClientID   string
+	DeviceCode string
+	ExpiresAt  time.Time
+	Done       bool
+	Err        string
+	RT         string
 }
 
 // New 构建服务（version 供状态页展示）。
@@ -68,6 +80,7 @@ func New(db *store.DB, version string) (*Server, error) {
 	s := &Server{
 		db: db, tpl: tpl, mux: http.NewServeMux(),
 		version: version, started: time.Now(), failIPs: map[string][]time.Time{},
+		pending: map[string]*pendingFlow{},
 	}
 	s.sc = &sched.Scheduler{DB: db, NewRunner: func() *check.Runner { return check.NewRunner(db) }}
 	s.routes()
@@ -98,6 +111,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/channels/add", s.requireAuth(s.handleAddChannel))
 	s.mux.HandleFunc("/channels/delete", s.requireAuth(s.handleDeleteChannel))
 	s.mux.HandleFunc("/channels/test", s.requireAuth(s.handleTestChannel))
+	s.mux.HandleFunc("/token/start", s.requireAuth(s.handleTokenStart))
+	s.mux.HandleFunc("/token/poll", s.requireAuth(s.handleTokenPoll))
 	s.mux.HandleFunc("/static/", http.FileServer(http.FS(assets)).ServeHTTP)
 }
 
@@ -331,7 +346,17 @@ func (s *Server) pageAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, row{a, maskRT(a.RefreshToken), status})
 	}
-	s.render(w, r, "accounts", map[string]any{"Rows": rows})
+	defCID, _ := s.db.GetSetting(r.Context(), "app.client_id")
+	s.render(w, r, "accounts", map[string]any{"Rows": rows, "DefaultClientID": defCID})
+}
+
+// defaultClientID 取表单值，空则回落 settings 的 app.client_id。
+func (s *Server) defaultClientID(ctx context.Context, formVal string) string {
+	if v := strings.TrimSpace(formVal); v != "" {
+		return v
+	}
+	v, _ := s.db.GetSetting(ctx, "app.client_id")
+	return v
 }
 
 var knownChecks = []string{"c1_token", "c2_me", "c3_recv", "c5_rules"}
@@ -343,7 +368,20 @@ func (s *Server) handleAddAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	email := strings.TrimSpace(r.FormValue("email"))
 	rt := strings.TrimSpace(r.FormValue("refresh_token"))
-	cid := strings.TrimSpace(r.FormValue("client_id"))
+	cid := s.defaultClientID(r.Context(), r.FormValue("client_id"))
+	// token_ref：网页授权向导取得的 RT（仅服务端持有，不经浏览器）
+	if ref := strings.TrimSpace(r.FormValue("token_ref")); ref != "" {
+		s.mu.Lock()
+		pf := s.pending[ref]
+		if pf != nil && pf.Done && pf.RT != "" {
+			rt = pf.RT
+			if strings.TrimSpace(r.FormValue("client_id")) == "" {
+				cid = pf.ClientID
+			}
+			delete(s.pending, ref)
+		}
+		s.mu.Unlock()
+	}
 	if email == "" || rt == "" || cid == "" {
 		http.Redirect(w, r, "/accounts?flash="+urlq("email/client_id/refresh_token 必填"), 303)
 		return
@@ -466,9 +504,11 @@ func (s *Server) pageAlerts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) pageSettings(w http.ResponseWriter, r *http.Request) {
 	iv, jt, th := s.sc.Params(r.Context())
+	cid, _ := s.db.GetSetting(r.Context(), "app.client_id")
 	s.render(w, r, "settings", map[string]any{
 		"IntervalMin": iv, "Jitter": jt, "Threshold": th,
-		"Uptime": time.Since(s.started).Round(time.Second).String(),
+		"ClientID": cid,
+		"Uptime":   time.Since(s.started).Round(time.Second).String(),
 	})
 }
 
@@ -481,6 +521,7 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		{"schedule.interval_min", r.FormValue("interval_min")},
 		{"schedule.jitter", r.FormValue("jitter")},
 		{"schedule.fail_threshold", r.FormValue("fail_threshold")},
+		{"app.client_id", r.FormValue("client_id")},
 	} {
 		if kv[1] != "" {
 			_ = s.db.SetSetting(r.Context(), kv[0], kv[1])
@@ -561,6 +602,74 @@ func (s *Server) handleTestChannel(w http.ResponseWriter, r *http.Request) {
 		msg = "发送失败: " + err.Error()
 	}
 	http.Redirect(w, r, "/channels?flash="+urlq(msg), 303)
+}
+
+// ---- device flow（网页授权向导；RT 仅服务端持有）----
+
+func (s *Server) handleTokenStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || !s.csrfCheck(r) {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	cid := s.defaultClientID(r.Context(), r.FormValue("client_id"))
+	if cid == "" {
+		writeJSON(w, 400, map[string]any{"err": "client_id 必填（或在设置页配置默认）"})
+		return
+	}
+	dc, err := msauth.New().StartDeviceCode(r.Context(), cid, msauth.GraphScope)
+	if err != nil {
+		writeJSON(w, 502, map[string]any{"err": "devicecode: " + err.Error()})
+		return
+	}
+	id := randToken()[:16]
+	pf := &pendingFlow{
+		ClientID:   cid,
+		DeviceCode: dc.DeviceCode,
+		ExpiresAt:  time.Now().Add(time.Duration(dc.ExpiresIn) * time.Second),
+	}
+	s.mu.Lock()
+	// 顺手清理过期 pending
+	for k, v := range s.pending {
+		if time.Now().After(v.ExpiresAt) {
+			delete(s.pending, k)
+		}
+	}
+	s.pending[id] = pf
+	s.mu.Unlock()
+	go func() {
+		rt, err := msauth.New().PollDeviceCode(context.Background(), cid, dc.DeviceCode, dc.Interval)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		pf.Done = true
+		if err != nil {
+			pf.Err = err.Error()
+		} else {
+			pf.RT = rt
+		}
+	}()
+	writeJSON(w, 200, map[string]any{
+		"id": id, "user_code": dc.UserCode, "url": dc.VerificationURL,
+		"expires_in": dc.ExpiresIn,
+	})
+}
+
+func (s *Server) handleTokenPoll(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	pf := s.pending[r.URL.Query().Get("id")]
+	s.mu.Unlock()
+	if pf == nil {
+		writeJSON(w, 404, map[string]any{"err": "授权会话不存在或已过期"})
+		return
+	}
+	out := map[string]any{"done": pf.Done}
+	if pf.Done {
+		if pf.Err != "" {
+			out["err"] = pf.Err
+		} else {
+			out["ok"] = true
+		}
+	}
+	writeJSON(w, 200, out)
 }
 
 // ---- helpers ----

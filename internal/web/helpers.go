@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"net/http"
 	"net/url"
 	"time"
 
@@ -45,3 +47,9 @@ func sendTest(ctx context.Context, db *store.DB, id int64) error {
 type errText string
 
 func (e errText) Error() string { return string(e) }
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}

@@ -3,13 +3,28 @@
 <body>
 {{template "nav" .}}
 <main>
+<h2>在线获取授权（Refresh Token）</h2>
+<div class="card">
+<div class="grid3">
+<label>Client ID（留空用默认）<input id="tk_client" placeholder="{{.Data.DefaultClientID}}"></label>
+</div>
+<button type="button" onclick="tkStart()">发起授权</button>
+<div id="tk_step" style="display:none;margin-top:12px">
+<p>1. 打开 <a id="tk_url" target="_blank" rel="noopener"></a><br>
+2. 输入代码 <b id="tk_code" class="mono" style="font-size:18px"></b><br>
+3. 用要监控的 Outlook 账号登录并同意授权</p>
+<p id="tk_status" class="dim">等待授权…</p>
+</div>
+</div>
+
 <h2>添加账号</h2>
 <form method="post" action="/accounts/add" class="card">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
+<input type="hidden" name="token_ref" id="tk_ref">
 <div class="grid3">
 <label>邮箱 <input name="email" type="email" required placeholder="x@outlook.com"></label>
-<label>Client ID <input name="client_id" required placeholder="app client id"></label>
-<label>Refresh Token <input name="refresh_token" type="password" required autocomplete="off"></label>
+<label>Client ID（留空用默认/授权所用）<input name="client_id" id="add_client" placeholder="{{.Data.DefaultClientID}}"></label>
+<label>Refresh Token <input name="refresh_token" id="add_rt" type="password" autocomplete="off" placeholder="网页授权或手工粘贴"></label>
 </div>
 <div class="checks">
 <label><input type="checkbox" name="chk_c1_token" checked> c1_token</label>
@@ -18,7 +33,33 @@
 <label><input type="checkbox" name="chk_c5_rules" checked> c5_rules</label>
 </div>
 <button>添加</button>
+<p class="dim">RT 也可留空——先在上方完成「在线获取授权」再提交即可（token 不出现在页面中）。</p>
 </form>
+<script>
+let tkID=null,tkTimer=null;
+async function tkStart(){
+ const r=await fetch('/token/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+  body:'csrf='+encodeURIComponent('{{.CSRF}}')+'&client_id='+encodeURIComponent(document.getElementById('tk_client').value)});
+ const j=await r.json();
+ if(j.err){document.getElementById('tk_status')&&(document.getElementById('tk_step').style.display='block',document.getElementById('tk_status').textContent='失败: '+j.err);return}
+ tkID=j.id;
+ document.getElementById('tk_step').style.display='block';
+ document.getElementById('tk_code').textContent=j.user_code;
+ const a=document.getElementById('tk_url');a.href=j.url;a.textContent=j.url;
+ document.getElementById('tk_status').textContent='等待授权…';
+ tkTimer=setInterval(tkPoll,3000);
+}
+async function tkPoll(){
+ if(!tkID)return;
+ const r=await fetch('/token/poll?id='+tkID);const j=await r.json();
+ const st=document.getElementById('tk_status');
+ if(j.err){st.innerHTML='<span class="err">'+j.err+'</span>';clearInterval(tkTimer);return}
+ if(j.done&&j.ok){st.innerHTML='<b style="color:var(--ok)">授权成功，RT 已就绪——请直接在下方提交添加</b>';
+  document.getElementById('tk_ref').value=tkID;
+  document.getElementById('add_client').value=document.getElementById('tk_client').value;
+  clearInterval(tkTimer);}
+}
+</script>
 
 <h2>账号列表</h2>
 <table>

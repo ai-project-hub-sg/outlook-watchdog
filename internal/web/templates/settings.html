@@ -11,6 +11,7 @@
 <label>Jitter (0~0.9) <input name="jitter" type="number" step="0.05" min="0" max="0.9" value="{{.Data.Jitter}}"></label>
 <label>告警阈值(连续失败轮) <input name="fail_threshold" type="number" min="1" value="{{.Data.Threshold}}"></label>
 </div>
+<label>默认 Client ID（添加账号/在线授权留空时用）<input name="client_id" value="{{.Data.ClientID}}" placeholder="留空则表单必填"></label>
 <button>保存</button>
 </form>
 

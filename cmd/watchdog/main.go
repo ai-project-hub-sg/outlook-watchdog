@@ -643,7 +643,10 @@ func cmdSettings(ctx context.Context, cfg *config.Config, args []string) int {
 		return 0
 	}
 	if args[0] == "set" && len(args) == 3 {
-		key := "schedule." + args[1]
+		key := args[1]
+		if !strings.Contains(key, ".") {
+			key = "schedule." + key
+		}
 		if err := db.SetSetting(ctx, key, args[2]); err != nil {
 			fmt.Fprintln(os.Stderr, "set:", err)
 			return 1
