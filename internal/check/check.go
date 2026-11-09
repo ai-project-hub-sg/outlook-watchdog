@@ -99,12 +99,12 @@ func (r *Runner) RunAccount(ctx context.Context, a *store.Account, trigger strin
 
 	// ---- C6/C7: 协议探测（默认关；scope 不足→unavailable） ----
 	if a.Checks["c6_imap"] {
-		cr := r.checkProto(ctx, a, "c6_imap", "IMAP.AccessAsUser.All", "outlook.office365.com", probe.IMAP)
+		cr := r.checkProto(ctx, a, "c6_imap", "https://outlook.office.com/IMAP.AccessAsUser.All", "outlook.office365.com", probe.IMAP)
 		out.Results = append(out.Results, cr)
 		_ = r.Store.AddResult(ctx, runPK, &cr)
 	}
 	if a.Checks["c7_smtp"] {
-		cr := r.checkProto(ctx, a, "c7_smtp", "SMTP.Send", "smtp.office365.com", probe.SMTP)
+		cr := r.checkProto(ctx, a, "c7_smtp", "https://outlook.office.com/SMTP.Send", "smtp.office365.com", probe.SMTP)
 		out.Results = append(out.Results, cr)
 		_ = r.Store.AddResult(ctx, runPK, &cr)
 	}
@@ -162,7 +162,12 @@ func (r *Runner) checkProto(ctx context.Context, a *store.Account, name, scope, 
 		_ = r.Store.UpdateRefreshToken(ctx, a.ID, g.NewRefreshToken)
 	}
 	if err := fn(ctx, host, a.Email, g.AccessToken); err != nil {
-		res.Result, res.Classification, res.Detail = "fail", "auth_failed", truncateStr(err.Error(), 120)
+		if strings.Contains(err.Error(), "SmtpClientAuthentication is disabled") {
+			res.Result, res.Classification, res.Detail = "unavailable", "smtp_disabled",
+				"SMTP AUTH 对该邮箱被禁用（个人邮箱无开关，可关闭本检查项）"
+		} else {
+			res.Result, res.Classification, res.Detail = "fail", "auth_failed", truncateStr(err.Error(), 120)
+		}
 	} else {
 		res.Result, res.Classification, res.Detail = "pass", "ok", "xoauth2 ok"
 	}

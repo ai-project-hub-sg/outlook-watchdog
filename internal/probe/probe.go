@@ -117,10 +117,10 @@ func SMTP(ctx context.Context, host, user, token string) error {
 		return err
 	}
 	defer c.Close()
-	if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
+	if err := c.Hello("watchdog.local"); err != nil {
 		return err
 	}
-	if err := c.Hello("watchdog.local"); err != nil {
+	if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
 		return err
 	}
 	return c.Auth(&smtpXoauth2{user: user, token: token})
