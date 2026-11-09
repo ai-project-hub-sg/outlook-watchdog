@@ -15,6 +15,8 @@ import (
 	"outlook-watchdog/internal/classify"
 	"outlook-watchdog/internal/config"
 	"outlook-watchdog/internal/msauth"
+	"outlook-watchdog/internal/notify"
+	"outlook-watchdog/internal/sched"
 	"outlook-watchdog/internal/store"
 )
 
@@ -31,7 +33,11 @@ func usage() {
   watchdog account add --email x --client-id y --rt-env VAR [--proxy p]
   watchdog account list
   watchdog account remove --account x
-  watchdog get-token [--client-id id] [--scope s]   device code 获取初始 RT
+  watchdog run                        常驻调度循环（interval+jitter）
+  watchdog channel add|list|remove    告警通道管理（webhook / 独立SMTP）
+  watchdog test-notify                发送测试告警
+  watchdog settings [list|set ...]    调度参数查看/修改
+  watchdog get-token [--client-id id] [--scope s] [--save-env NAME]
   watchdog migrate                      执行 DB 迁移
   watchdog version
 
@@ -56,18 +62,28 @@ func main() {
 	switch os.Args[1] {
 	case "check":
 		code = cmdCheck(ctx, cfg, os.Args[2:])
+	case "run":
+		code = cmdRun(ctx, cfg, os.Args[2:])
 	case "snapshot":
 		code = cmdSnapshot(ctx, cfg, os.Args[2:])
 	case "status":
 		code = cmdStatus(ctx, cfg, os.Args[2:])
 	case "account":
 		code = cmdAccount(ctx, cfg, os.Args[2:])
+	case "channel":
+		code = cmdChannel(ctx, cfg, os.Args[2:])
+	case "alerts":
+		code = cmdAlerts(ctx, cfg, os.Args[2:])
+	case "test-notify":
+		code = cmdTestNotify(ctx, cfg, os.Args[2:])
+	case "settings":
+		code = cmdSettings(ctx, cfg, os.Args[2:])
 	case "get-token":
 		code = cmdGetToken(ctx, cfg, os.Args[2:])
 	case "migrate":
 		code = cmdMigrate(ctx, cfg, os.Args[2:])
 	case "serve":
-		fmt.Fprintln(os.Stderr, "serve 将在 M4 里程碑提供（调度器+WebUI）")
+		fmt.Fprintln(os.Stderr, "serve 将在 M4 里程碑提供（调度器+WebUI）；当前请用 run")
 		code = 2
 	case "version", "--version", "-v":
 		fmt.Println(version)
@@ -86,6 +102,13 @@ func openStore(cfg *config.Config) (*store.DB, error) {
 
 // ---- check ----
 
+func newScheduler(db *store.DB) *sched.Scheduler {
+	return &sched.Scheduler{
+		DB:        db,
+		NewRunner: func() *check.Runner { return check.NewRunner(db) },
+	}
+}
+
 func cmdCheck(ctx context.Context, cfg *config.Config, args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	once := fs.Bool("once", true, "跑一轮后退出")
@@ -102,37 +125,41 @@ func cmdCheck(ctx context.Context, cfg *config.Config, args []string) int {
 	}
 	defer db.Close()
 
-	var accounts []*store.Account
+	var onlyID int64
+	var byEmail map[int64]*store.Account
 	if *acct != "" {
 		a, err := db.GetAccount(ctx, *acct)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "account:", err)
 			return 2
 		}
-		accounts = []*store.Account{a}
-	} else {
-		accounts, err = db.ListAccounts(ctx, true)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "store:", err)
-			return 2
-		}
+		onlyID = a.ID
 	}
-	if len(accounts) == 0 {
-		fmt.Println("无启用账号（用 watchdog account add 添加）")
+	all, _ := db.ListAccounts(ctx, false)
+	byEmail = map[int64]*store.Account{}
+	for _, a := range all {
+		byEmail[a.ID] = a
+	}
+	if len(all) == 0 {
+		fmt.Println("无账号（用 watchdog account add 添加）")
 		return 0
 	}
 
-	r := check.NewRunner(db)
+	s := newScheduler(db)
+	_, _, threshold := s.Params(ctx)
+	outs := s.RunOnce(ctx, "cli", threshold, onlyID)
 	worst := 0
-	for _, a := range accounts {
-		ar := *a // 每账号独立状态
-		out, err := r.RunAccount(ctx, &ar, "cli")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[%s] run error: %v\n", maskEmail(ar.Email), err)
+	for _, out := range outs {
+		a := byEmail[out.AccountID]
+		if a == nil {
+			continue
+		}
+		if out.Err != nil {
+			fmt.Fprintf(os.Stderr, "[%s] run error: %v\n", maskEmail(a.Email), out.Err)
 			worst = 2
 			continue
 		}
-		printOutcome(&ar, out)
+		printOutcome(a, out)
 		if out.Status == classify.StatusFailed || out.Status == classify.StatusDegraded {
 			if worst < 1 {
 				worst = 1
@@ -140,6 +167,32 @@ func cmdCheck(ctx context.Context, cfg *config.Config, args []string) int {
 		}
 	}
 	return worst
+}
+
+// ---- run（调度循环，无 WebUI） ----
+
+func cmdRun(ctx context.Context, cfg *config.Config, args []string) int {
+	db, err := openStore(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "store:", err)
+		return 2
+	}
+	defer db.Close()
+	s := newScheduler(db)
+	s.OnRound = func(a *store.Account, status string, err error) {
+		ts := time.Now().Format("15:04:05")
+		if err != nil {
+			fmt.Printf("[%s] %v\n", ts, err)
+			return
+		}
+		if a == nil {
+			fmt.Printf("[%s] %s\n", ts, status)
+			return
+		}
+		fmt.Printf("[%s] %s => %s\n", ts, maskEmail(a.Email), status)
+	}
+	s.Loop(ctx)
+	return 0
 }
 
 func printOutcome(a *store.Account, out *check.Outcome) {
@@ -344,6 +397,212 @@ func cmdMigrate(ctx context.Context, cfg *config.Config, args []string) int {
 	defer db.Close()
 	fmt.Println("migrations applied")
 	return 0
+}
+
+// ---- channel ----
+
+func cmdChannel(ctx context.Context, cfg *config.Config, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "channel 子命令: add|list|remove")
+		return 2
+	}
+	db, err := openStore(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "store:", err)
+		return 2
+	}
+	defer db.Close()
+
+	switch args[0] {
+	case "add":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "channel add webhook|smtp ...")
+			return 2
+		}
+		switch args[1] {
+		case "webhook":
+			fs := flag.NewFlagSet("channel add webhook", flag.ContinueOnError)
+			name := fs.String("name", "webhook", "通道名")
+			url := fs.String("url", "", "webhook URL")
+			token := fs.String("token-env", "", "可选：存放 Authorization token 的环境变量名")
+			if err := fs.Parse(args[2:]); err != nil || *url == "" {
+				fmt.Fprintln(os.Stderr, "需要 --url")
+				return 2
+			}
+			c := &store.Channel{Type: "webhook", Name: *name, Enabled: true,
+				Config: map[string]string{"url": *url}}
+			if *token != "" {
+				c.Config["token"] = os.Getenv(*token)
+			}
+			id, err := db.AddChannel(ctx, c)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "add:", err)
+				return 1
+			}
+			fmt.Printf("已添加 webhook 通道 id=%d\n", id)
+			return 0
+		case "smtp":
+			fs := flag.NewFlagSet("channel add smtp", flag.ContinueOnError)
+			name := fs.String("name", "smtp", "通道名")
+			host := fs.String("host", "", "SMTP 主机（如 smtp.163.com）")
+			port := fs.String("port", "465", "端口：465=SSL，587/25=STARTTLS")
+			user := fs.String("user", "", "发信账号（须独立于被监控账号）")
+			passEnv := fs.String("pass-env", "", "存放 SMTP 密码/授权码的环境变量名")
+			to := fs.String("to", "", "告警接收邮箱")
+			if err := fs.Parse(args[2:]); err != nil || *host == "" || *user == "" || *to == "" || *passEnv == "" {
+				fmt.Fprintln(os.Stderr, "需要 --host --user --to --pass-env")
+				return 2
+			}
+			pass := os.Getenv(*passEnv)
+			if pass == "" {
+				fmt.Fprintf(os.Stderr, "环境变量 %s 为空\n", *passEnv)
+				return 2
+			}
+			id, err := db.AddChannel(ctx, &store.Channel{Type: "smtp", Name: *name, Enabled: true,
+				Config: map[string]string{"host": *host, "port": *port, "user": *user, "pass": pass, "to": *to}})
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "add:", err)
+				return 1
+			}
+			fmt.Printf("已添加 smtp 通道 id=%d (%s→%s)\n", id, maskEmail(*user), maskEmail(*to))
+			return 0
+		}
+		fmt.Fprintln(os.Stderr, "channel add 类型: webhook|smtp")
+		return 2
+
+	case "list":
+		chs, err := db.ListChannels(ctx, false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "list:", err)
+			return 2
+		}
+		for _, c := range chs {
+			masked := map[string]string{}
+			for k, v := range c.Config {
+				if k == "pass" || k == "token" {
+					v = "****"
+				}
+				masked[k] = v
+			}
+			fmt.Printf("%-3d %-8s %-12s enabled=%v %v\n", c.ID, c.Type, c.Name, c.Enabled, masked)
+		}
+		return 0
+
+	case "remove":
+		fs := flag.NewFlagSet("channel remove", flag.ContinueOnError)
+		id := fs.Int64("id", 0, "通道 id")
+		if err := fs.Parse(args[1:]); err != nil || *id == 0 {
+			return 2
+		}
+		if err := db.DeleteChannel(ctx, *id); err != nil {
+			fmt.Fprintln(os.Stderr, "remove:", err)
+			return 1
+		}
+		fmt.Printf("已删除通道 id=%d\n", *id)
+		return 0
+	}
+	fmt.Fprintln(os.Stderr, "channel 子命令: add|list|remove")
+	return 2
+}
+
+// ---- test-notify ----
+
+func cmdTestNotify(ctx context.Context, cfg *config.Config, args []string) int {
+	db, err := openStore(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "store:", err)
+		return 2
+	}
+	defer db.Close()
+	chs, err := db.ListChannels(ctx, true)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "channels:", err)
+		return 2
+	}
+	if len(chs) == 0 {
+		fmt.Println("无启用告警通道（用 watchdog channel add 添加）")
+		return 0
+	}
+	msg := &notify.Message{
+		Subject: "[watchdog·测试] 告警通道验证",
+		Body:    "这是一条测试告警。\n时间: " + time.Now().UTC().Format(time.RFC3339),
+		At:      time.Now().UTC().Format(time.RFC3339),
+	}
+	code := 0
+	for _, ch := range chs {
+		sender, ok := notify.Senders[ch.Type]
+		if !ok {
+			fmt.Printf("通道 %d (%s): 未知类型\n", ch.ID, ch.Type)
+			code = 1
+			continue
+		}
+		if err := sender.Send(ctx, ch.Config, msg); err != nil {
+			fmt.Printf("通道 %d (%s:%s): 发送失败 %v\n", ch.ID, ch.Type, ch.Name, err)
+			code = 1
+		} else {
+			fmt.Printf("通道 %d (%s:%s): 发送成功\n", ch.ID, ch.Type, ch.Name)
+		}
+	}
+	return code
+}
+
+// ---- alerts ----
+
+func cmdAlerts(ctx context.Context, cfg *config.Config, args []string) int {
+	fs := flag.NewFlagSet("alerts", flag.ContinueOnError)
+	limit := fs.Int("limit", 20, "条数")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	db, err := openStore(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "store:", err)
+		return 2
+	}
+	defer db.Close()
+	evs, err := db.ListAlerts(ctx, *limit)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "alerts:", err)
+		return 2
+	}
+	fmt.Printf("%-4s %-20s %-12s %-22s %s\n", "ID", "SENT_AT", "TRANSITION", "CHANNEL", "REASON/ERROR")
+	for _, e := range evs {
+		tr := e.FromStatus + "→" + e.ToStatus
+		errTag := ""
+		if e.Error != "" {
+			errTag = " err=" + e.Error
+		}
+		fmt.Printf("%-4d %-20s %-12s %-22s %s%s\n", e.ID, e.SentAt, tr, e.Channel, e.Reason, errTag)
+	}
+	return 0
+}
+
+// ---- settings ----
+
+func cmdSettings(ctx context.Context, cfg *config.Config, args []string) int {
+	db, err := openStore(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "store:", err)
+		return 2
+	}
+	defer db.Close()
+	if len(args) == 0 || args[0] == "list" {
+		s := newScheduler(db)
+		iv, jt, th := s.Params(ctx)
+		fmt.Printf("schedule.interval_min=%d\nschedule.jitter=%.2f\nschedule.fail_threshold=%d\n", iv, jt, th)
+		return 0
+	}
+	if args[0] == "set" && len(args) == 3 {
+		key := "schedule." + args[1]
+		if err := db.SetSetting(ctx, key, args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "set:", err)
+			return 1
+		}
+		fmt.Printf("%s=%s\n", key, args[2])
+		return 0
+	}
+	fmt.Fprintln(os.Stderr, "settings [list|set interval_min|jitter|fail_threshold <值>]")
+	return 2
 }
 
 // ---- 脱敏工具 ----

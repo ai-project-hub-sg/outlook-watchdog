@@ -308,6 +308,117 @@ func (d *DB) AddResult(ctx context.Context, runPK int64, r *CheckResult) error {
 	return err
 }
 
+// ---- notify_channels ----
+
+// Channel 对应 notify_channels 表。
+type Channel struct {
+	ID      int64             `json:"id"`
+	Type    string            `json:"type"` // webhook|smtp
+	Name    string            `json:"name"`
+	Config  map[string]string `json:"config"`
+	Enabled bool              `json:"enabled"`
+}
+
+// AddChannel 新增告警通道。
+func (d *DB) AddChannel(ctx context.Context, c *Channel) (int64, error) {
+	cj, err := json.Marshal(c.Config)
+	if err != nil {
+		return 0, err
+	}
+	res, err := d.ExecContext(ctx,
+		`INSERT INTO notify_channels(type,name,config_json,enabled) VALUES (?,?,?,?)`,
+		c.Type, c.Name, string(cj), c.Enabled)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// ListChannels 返回告警通道（enabledOnly 时仅启用）。
+func (d *DB) ListChannels(ctx context.Context, enabledOnly bool) ([]*Channel, error) {
+	q := `SELECT id,type,name,config_json,enabled FROM notify_channels`
+	if enabledOnly {
+		q += ` WHERE enabled=1`
+	}
+	q += ` ORDER BY id`
+	rows, err := d.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Channel
+	for rows.Next() {
+		var c Channel
+		var cj string
+		if err := rows.Scan(&c.ID, &c.Type, &c.Name, &cj, &c.Enabled); err != nil {
+			return nil, err
+		}
+		json.Unmarshal([]byte(cj), &c.Config)
+		out = append(out, &c)
+	}
+	return out, rows.Err()
+}
+
+// DeleteChannel 删除通道。
+func (d *DB) DeleteChannel(ctx context.Context, id int64) error {
+	_, err := d.ExecContext(ctx, `DELETE FROM notify_channels WHERE id=?`, id)
+	return err
+}
+
+// ---- alert_events ----
+
+// RecordAlert 记录一次告警事件。
+func (d *DB) RecordAlert(ctx context.Context, accountID int64, from, to, reason, channel, sendErr string) error {
+	_, err := d.ExecContext(ctx,
+		`INSERT INTO alert_events(account_id,from_status,to_status,reason,channel,error)
+		 VALUES (?,?,?,?,?,?)`, accountID, from, to, reason, channel, sendErr)
+	return err
+}
+
+// AlertEvent 对应 alert_events 表。
+type AlertEvent struct {
+	ID         int64  `json:"id"`
+	AccountID  int64  `json:"account_id"`
+	FromStatus string `json:"from_status"`
+	ToStatus   string `json:"to_status"`
+	Reason     string `json:"reason"`
+	Channel    string `json:"channel"`
+	SentAt     string `json:"sent_at"`
+	Error      string `json:"error"`
+}
+
+// ListAlerts 返回最近告警事件（倒序，limit 条）。
+func (d *DB) ListAlerts(ctx context.Context, limit int) ([]*AlertEvent, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := d.QueryContext(ctx,
+		`SELECT id,account_id,from_status,to_status,reason,channel,sent_at,error
+		 FROM alert_events ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*AlertEvent
+	for rows.Next() {
+		var e AlertEvent
+		if err := rows.Scan(&e.ID, &e.AccountID, &e.FromStatus, &e.ToStatus,
+			&e.Reason, &e.Channel, &e.SentAt, &e.Error); err != nil {
+			return nil, err
+		}
+		out = append(out, &e)
+	}
+	return out, rows.Err()
+}
+
+// MarkAlerted 更新 last_alert_status/last_alert_at（告警或恢复后调用）。
+func (d *DB) MarkAlerted(ctx context.Context, accountID int64, status string) error {
+	_, err := d.ExecContext(ctx,
+		`UPDATE account_state SET last_alert_at=strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+		 last_alert_status=? WHERE account_id=?`, status, accountID)
+	return err
+}
+
 // ---- settings ----
 
 // GetSetting 取设置项；无则返回 ""。

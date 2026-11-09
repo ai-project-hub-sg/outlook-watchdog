@@ -33,6 +33,7 @@ type Outcome struct {
 	AccountID int64
 	Status    string
 	Results   []store.CheckResult
+	Err       error // 编排层错误（非账号判定）
 }
 
 // NewRunner 构造默认 Runner。
@@ -223,7 +224,7 @@ func (r *Runner) updateState(ctx context.Context, accountID int64, status string
 	if err != nil {
 		return err
 	}
-	if status == classify.StatusFailed || status == classify.StatusUnknown {
+	if status == classify.StatusFailed || status == classify.StatusUnknown || status == classify.StatusDegraded {
 		s.ConsecutiveFail++
 	} else {
 		s.ConsecutiveFail = 0
