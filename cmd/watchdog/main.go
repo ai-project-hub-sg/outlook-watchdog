@@ -286,12 +286,11 @@ func cmdGetToken(ctx context.Context, cfg *config.Config, args []string) int {
 	fs := flag.NewFlagSet("get-token", flag.ContinueOnError)
 	clientID := fs.String("client-id", msauth.DefaultDeviceCodeClientID, "client_id（默认 Azure CLI 公开 id）")
 	scope := fs.String("scope", msauth.GraphScope, "请求 scope")
-	rtEnv := fs.String("rt-env", "", "把 RT 写入哪个环境变量语义（仅提示；输出只打印到本终端）")
+	saveEnv := fs.String("save-env", "", "把 RT 以 NAME=<rt> 追加写入 .env 的变量名（推荐：RT 不经终端回显）")
 	timeout := fs.Duration("timeout", 10*time.Minute, "等待授权超时")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	_ = *rtEnv
 
 	c := msauth.New()
 	dc, err := c.StartDeviceCode(ctx, *clientID, *scope)
@@ -309,10 +308,29 @@ func cmdGetToken(ctx context.Context, cfg *config.Config, args []string) int {
 		fmt.Fprintln(os.Stderr, "poll:", err)
 		return 1
 	}
-	// 安全：RT 只打印到本终端，不写文件/日志；由用户自行存入 .env
+	if *saveEnv != "" {
+		if err := appendEnv(".env", *saveEnv, rt); err != nil {
+			fmt.Fprintln(os.Stderr, "save-env:", err)
+			return 1
+		}
+		fmt.Printf("授权成功，refresh_token 已写入 .env 变量 %s（未回显明文）\n", *saveEnv)
+		return 0
+	}
+	// 无 --save-env 时才打印到终端（仅显示一次，由用户自行存入 .env）
 	fmt.Println("授权成功。refresh_token（仅显示一次，请存入 .env 对应变量）:")
 	fmt.Println(rt)
 	return 0
+}
+
+// appendEnv 把 KEY=VALUE 追加到 .env 文件末尾。
+func appendEnv(path, key, value string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "\n%s=\"%s\"", key, value)
+	return err
 }
 
 // ---- migrate ----
