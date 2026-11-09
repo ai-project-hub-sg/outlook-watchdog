@@ -14,7 +14,8 @@ main{max-width:1100px;margin:0 auto;padding:16px}
 .card{max-width:520px}
 h1{font-size:20px}h2{font-size:16px;margin:24px 0 10px}h3{font-size:14px;margin:20px 0 8px}
 label{display:block;margin:8px 0}
-input,select{width:100%;padding:7px 9px;background:#0c1117;border:1px solid var(--line);border-radius:6px;color:var(--fg)}
+input,select,textarea{width:100%;padding:7px 9px;background:#0c1117;border:1px solid var(--line);border-radius:6px;color:var(--fg);font-family:inherit}
+textarea{font-family:ui-monospace,Consolas,monospace}
 input[type=checkbox]{width:auto}
 button{padding:8px 16px;margin-top:12px;background:var(--acc);border:0;border-radius:6px;color:#fff;cursor:pointer}
 button.link{background:none;color:var(--acc);padding:0;margin:0}

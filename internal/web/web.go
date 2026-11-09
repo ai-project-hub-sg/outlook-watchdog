@@ -24,6 +24,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"outlook-watchdog/internal/check"
+	"outlook-watchdog/internal/classify"
 	"outlook-watchdog/internal/graph"
 	"outlook-watchdog/internal/msauth"
 	"outlook-watchdog/internal/sched"
@@ -75,6 +76,8 @@ func New(db *store.DB, version string) (*Server, error) {
 		"maskText": maskEmailsInText,
 		"badge":    badgeForTpl,
 		"seq":      seq,
+		"add":      func(a, b int) int { return a + b },
+		"join":     strings.Join,
 		"eqStr":    func(a, b string) bool { return a == b },
 	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
@@ -99,6 +102,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/setup", s.pageSetup)
 	s.mux.HandleFunc("/logout", s.handleLogout)
 	s.mux.HandleFunc("/accounts", s.requireAuth(s.pageAccounts))
+	s.mux.HandleFunc("/accounts/import", s.requireAuth(s.handleImportAccounts))
+	s.mux.HandleFunc("/logs", s.requireAuth(s.pageLogs))
 	s.mux.HandleFunc("/accounts/add", s.requireAuth(s.handleAddAccount))
 	s.mux.HandleFunc("/accounts/delete", s.requireAuth(s.handleDeleteAccount))
 	s.mux.HandleFunc("/accounts/toggle", s.requireAuth(s.handleToggleAccount))
@@ -460,10 +465,15 @@ func (s *Server) pageAccountDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	st, _ := s.db.GetState(r.Context(), id)
 	runs, _ := s.db.ListRuns(r.Context(), id, 20)
-	_, sha, _ := s.db.GetRuleSnapshot(r.Context(), id)
+	baseJSON, sha, _ := s.db.GetRuleSnapshot(r.Context(), id)
+	var baseRules []classify.NormRule
+	if baseJSON != "" {
+		_ = json.Unmarshal([]byte(baseJSON), &baseRules)
+	}
 	s.render(w, r, "account", map[string]any{
 		"A": a, "RT": maskRT(a.RefreshToken), "State": st,
 		"Runs": runs, "BaselineSHA": sha, "Checks": knownChecks,
+		"BaseRules": baseRules,
 	})
 }
 
@@ -505,6 +515,82 @@ func (s *Server) threshold(ctx context.Context) int {
 	return t
 }
 
+// handleImportAccounts 批量粘贴导入：每行 `email,client_id,refresh_token`
+// （client_id 可空 → 用默认）。
+func (s *Server) handleImportAccounts(w http.ResponseWriter, r *http.Request) {
+	if !s.csrfCheck(r) {
+		http.Error(w, "CSRF", 403)
+		return
+	}
+	var okCnt, failCnt int
+	for _, line := range strings.Split(r.FormValue("bulk"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Split(line, ",")
+		if len(parts) < 2 {
+			failCnt++
+			continue
+		}
+		email := strings.TrimSpace(parts[0])
+		cid, rt := "", ""
+		if len(parts) == 2 {
+			rt = strings.TrimSpace(parts[1])
+		} else {
+			cid, rt = strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
+		}
+		cid = s.defaultClientID(r.Context(), cid)
+		if email == "" || rt == "" || cid == "" {
+			failCnt++
+			continue
+		}
+		a := &store.Account{
+			Email: email, ClientID: cid, RefreshToken: rt, Enabled: true,
+			Checks: map[string]bool{"c1_token": true, "c2_me": true, "c3_recv": true, "c5_rules": true},
+		}
+		if _, err := s.db.AddAccount(r.Context(), a); err != nil {
+			failCnt++
+			continue
+		}
+		okCnt++
+	}
+	http.Redirect(w, r, "/accounts?flash="+urlq(fmt.Sprintf("导入完成：成功 %d 条，失败 %d 条", okCnt, failCnt)), 303)
+}
+
+// ---- logs ----
+
+func (s *Server) pageLogs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	accountID, _ := strconv.ParseInt(q.Get("account"), 10, 64)
+	status := q.Get("status")
+	page, _ := strconv.Atoi(q.Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	const per = 50
+	runs, total, err := s.db.ListAllRuns(r.Context(), accountID, status, per, (page-1)*per)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if q.Get("format") == "jsonl" {
+		w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+		w.Header().Set("Content-Disposition", "attachment; filename=watchdog-runs.jsonl")
+		enc := json.NewEncoder(w)
+		for _, g := range runs {
+			g.Email = maskForTpl(g.Email) // 导出同样遵守脱敏纪律
+			_ = enc.Encode(g)
+		}
+		return
+	}
+	accs, _ := s.db.ListAccounts(r.Context(), false)
+	s.render(w, r, "logs", map[string]any{
+		"Runs": runs, "Accounts": accs, "Total": total, "Page": page,
+		"Pages": (total + per - 1) / per, "Account": accountID, "Status": status,
+	})
+}
+
 // ---- alerts ----
 
 func (s *Server) pageAlerts(w http.ResponseWriter, r *http.Request) {
@@ -523,10 +609,18 @@ func (s *Server) pageAlerts(w http.ResponseWriter, r *http.Request) {
 func (s *Server) pageSettings(w http.ResponseWriter, r *http.Request) {
 	iv, jt, th := s.sc.Params(r.Context())
 	cid, _ := s.db.GetSetting(r.Context(), "app.client_id")
+	last, next := s.sc.RoundInfo()
+	fmtT := func(t time.Time) string {
+		if t.IsZero() {
+			return "—"
+		}
+		return t.UTC().Format("2006-01-02 15:04:05Z")
+	}
 	s.render(w, r, "settings", map[string]any{
 		"IntervalMin": iv, "Jitter": jt, "Threshold": th,
-		"ClientID": cid,
-		"Uptime":   time.Since(s.started).Round(time.Second).String(),
+		"ClientID":  cid,
+		"Uptime":    time.Since(s.started).Round(time.Second).String(),
+		"LastRound": fmtT(last), "NextRound": fmtT(next),
 	})
 }
 

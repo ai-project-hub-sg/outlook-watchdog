@@ -30,6 +30,8 @@
 <table>
 <tr><th>版本</th><td>v{{.Version}}</td></tr>
 <tr><th>本次进程运行时长</th><td>{{.Data.Uptime}}</td></tr>
+<tr><th>调度器上轮检查</th><td>{{.Data.LastRound}}</td></tr>
+<tr><th>调度器下轮计划</th><td>{{.Data.NextRound}}</td></tr>
 </table>
 </main>
 </body></html>{{end}}

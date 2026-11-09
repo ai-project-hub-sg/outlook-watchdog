@@ -1,0 +1,45 @@
+{{define "logs"}}<!doctype html><html lang="zh">
+{{template "head" .}}
+<body>
+{{template "nav" .}}
+<main>
+<h2>检查日志</h2>
+<form method="get" action="/logs" class="checks">
+<label>账号
+<select name="account">
+<option value="0">全部</option>
+{{range .Data.Accounts}}<option value="{{.ID}}" {{if eq $.Data.Account .ID}}selected{{end}}>{{mask .Email}}</option>{{end}}
+</select></label>
+<label>状态
+<select name="status">
+<option value="">全部</option>
+<option value="ok" {{if eq $.Data.Status "ok"}}selected{{end}}>ok</option>
+<option value="degraded" {{if eq $.Data.Status "degraded"}}selected{{end}}>degraded</option>
+<option value="failed" {{if eq $.Data.Status "failed"}}selected{{end}}>failed</option>
+<option value="banned" {{if eq $.Data.Status "banned"}}selected{{end}}>banned</option>
+<option value="token_invalid" {{if eq $.Data.Status "token_invalid"}}selected{{end}}>token_invalid</option>
+</select></label>
+<button style="margin-top:0">筛选</button>
+<a href="/logs?format=jsonl&account={{.Data.Account}}&status={{.Data.Status}}"><button type="button" style="margin-top:0;background:#2a3441">导出 JSONL</button></a>
+</form>
+<p class="dim">共 {{.Data.Total}} 条</p>
+<table>
+<tr><th>ID</th><th>时间(UTC)</th><th>账号</th><th>状态</th><th>来源</th><th>详情</th></tr>
+{{range .Data.Runs}}
+<tr>
+<td class="dim">{{.ID}}</td><td class="dim">{{.StartedAt}}</td>
+<td><a href="/account/{{.AccountID}}">{{mask .Email}}</a></td>
+<td>{{if .Status}}<span class="badge {{badge .Status}}">{{.Status}}</span>{{else}}<span class="badge badge-warn">运行中…</span>{{end}}</td>
+<td class="dim">{{.Source}}</td>
+<td><a href="/account/{{.AccountID}}">查看</a></td>
+</tr>
+{{else}}<tr><td colspan="6" class="dim">无记录</td></tr>
+{{end}}
+</table>
+<div class="row">
+{{if gt .Data.Page 1}}<a href="/logs?page={{printf "%d" (add .Data.Page -1)}}&account={{.Data.Account}}&status={{.Data.Status}}">← 上一页</a>{{end}}
+<span class="dim">第 {{.Data.Page}} / {{.Data.Pages}} 页</span>
+{{if lt .Data.Page .Data.Pages}}<a href="/logs?page={{printf "%d" (add .Data.Page 1)}}&account={{.Data.Account}}&status={{.Data.Status}}">下一页 →</a>{{end}}
+</div>
+</main>
+</body></html>{{end}}

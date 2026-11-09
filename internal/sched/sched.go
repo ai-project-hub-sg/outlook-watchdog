@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
+	"sync"
 	"time"
 
 	"outlook-watchdog/internal/check"
@@ -25,6 +26,26 @@ type Scheduler struct {
 	DB        *store.DB
 	NewRunner func() *check.Runner
 	OnRound   func(a *store.Account, status string, err error) // 日志钩子
+
+	mu        sync.Mutex
+	lastRound time.Time // 上次轮次完成时间（零值=未跑过）
+	nextRound time.Time // 下轮计划时间（零值=Loop 未启动）
+}
+
+// RoundInfo 返回调度器运行态（WebUI 状态页用）。
+func (s *Scheduler) RoundInfo() (last, next time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastRound, s.nextRound
+}
+
+func (s *Scheduler) setRound(last, next time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !last.IsZero() {
+		s.lastRound = last
+	}
+	s.nextRound = next
 }
 
 // Params 从 settings 表读取调度参数（带默认值）。
@@ -96,6 +117,7 @@ func (s *Scheduler) Loop(ctx context.Context) {
 	for {
 		s.RunOnce(ctx, "sched", threshold, 0)
 		wait := base + time.Duration((rand.Float64()*2-1)*jitter*float64(base))
+		s.setRound(time.Now(), time.Now().Add(wait))
 		select {
 		case <-ctx.Done():
 			return

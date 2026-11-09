@@ -36,6 +36,15 @@
 <button>添加</button>
 <p class="dim">RT 也可留空——先在上方完成「在线获取授权」再提交即可（token 不出现在页面中）。</p>
 </form>
+
+<h2>批量导入</h2>
+<form method="post" action="/accounts/import" class="card">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<label>每行一条：<code>email,client_id,refresh_token</code>（client_id 可留空 → <code>email,,rt</code> 用默认）
+<textarea name="bulk" rows="5" placeholder="a@outlook.com,,0.AXoA…&#10;b@hotmail.com,14d82eec-…,0.AXoA…"></textarea></label>
+<button>导入</button>
+<p class="dim">导入内容含 RT，注意屏幕旁人；导入后不会自动检查，请逐个点「立即检查」。</p>
+</form>
 <script>
 let tkID=null,tkTimer=null;
 async function tkStart(){

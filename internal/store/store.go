@@ -509,6 +509,54 @@ func (d *DB) listResults(ctx context.Context, runPK int64) ([]CheckResult, error
 	return out, rows.Err()
 }
 
+// GlobalRun 是跨账号的一次运行（日志查询页用）。
+type GlobalRun struct {
+	ID         int64  `json:"id"`
+	AccountID  int64  `json:"account_id"`
+	Email      string `json:"email"`
+	Source     string `json:"source"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at"`
+	Status     string `json:"status"`
+}
+
+// ListAllRuns 跨账号分页查询运行记录；accountID/status 非零值时作过滤。
+func (d *DB) ListAllRuns(ctx context.Context, accountID int64, status string, limit, offset int) ([]*GlobalRun, int, error) {
+	where, args := "", []any{}
+	if accountID > 0 {
+		where += " AND r.account_id=?"
+		args = append(args, accountID)
+	}
+	if status != "" {
+		where += " AND r.status=?"
+		args = append(args, status)
+	}
+	var total int
+	if err := d.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM check_runs r WHERE 1=1`+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	q := `SELECT r.id, r.account_id, a.email, r.source, r.started_at,
+	             COALESCE(r.finished_at,''), COALESCE(r.status,'')
+	      FROM check_runs r JOIN accounts a ON a.id=r.account_id
+	      WHERE 1=1` + where + ` ORDER BY r.id DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+	rows, err := d.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []*GlobalRun
+	for rows.Next() {
+		g := &GlobalRun{}
+		if err := rows.Scan(&g.ID, &g.AccountID, &g.Email, &g.Source, &g.StartedAt, &g.FinishedAt, &g.Status); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, g)
+	}
+	return out, total, rows.Err()
+}
+
 // CreateSession 写入会话（token 由调用方生成）。
 func (d *DB) CreateSession(ctx context.Context, token string, ttl time.Duration) error {
 	exp := time.Now().UTC().Add(ttl).Format(time.RFC3339)

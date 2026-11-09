@@ -27,6 +27,18 @@
 <button>保存</button>
 </form>
 
+{{if .Data.BaselineSHA}}
+<h3>基线规则（{{len .Data.BaseRules}} 条，sha={{.Data.BaselineSHA}}）</h3>
+<table>
+<tr><th>规则名</th><th>启用</th><th>动作摘要</th></tr>
+{{range .Data.BaseRules}}
+<tr><td>{{.Name}}</td><td>{{.Enabled}}</td>
+<td class="dim">{{if .Forward}}fwd→{{maskText (join "," .Forward)}} {{end}}{{if .Redirect}}redir→{{maskText (join "," .Redirect)}} {{end}}{{if .MoveTo}}move→{{.MoveTo}} {{end}}{{if .Delete}}[删除]{{end}}{{if .StopProc}}[停止后续]{{end}}</td></tr>
+{{else}}<tr><td colspan="3" class="dim">基线为空（0 条规则）</td></tr>
+{{end}}
+</table>
+{{end}}
+
 <h3>检查历史</h3>
 {{range .Data.Runs}}
 <details class="run">
