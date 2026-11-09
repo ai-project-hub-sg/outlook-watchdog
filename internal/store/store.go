@@ -176,9 +176,9 @@ func (d *DB) GetAccount(ctx context.Context, idOrEmail string) (*Account, error)
 
 // ListAccounts 返回全部账号（enabledOnly 时仅启用）。
 func (d *DB) ListAccounts(ctx context.Context, enabledOnly bool) ([]*Account, error) {
-	q := `SELECT id,email,client_id,refresh_token,proxy,checks_json,enabled,created_at,updated_at FROM accounts`
+	q := `SELECT id,email,client_id,refresh_token,proxy,checks_json,enabled,created_at,updated_at FROM accounts WHERE deleted_at=''`
 	if enabledOnly {
-		q += ` WHERE enabled=1`
+		q += ` AND enabled=1`
 	}
 	q += ` ORDER BY id`
 	rows, err := d.QueryContext(ctx, q)
@@ -223,6 +223,22 @@ func (d *DB) UpdateAccountChecks(ctx context.Context, id int64, checks map[strin
 // DeleteAccount 删除账号（级联删除状态/基线/历史）。
 func (d *DB) DeleteAccount(ctx context.Context, id int64) error {
 	_, err := d.ExecContext(ctx, `DELETE FROM accounts WHERE id=?`, id)
+	return err
+}
+
+// SoftDeleteAccount 软删除：列表隐藏但保留全部历史（重授权等场景）。
+func (d *DB) SoftDeleteAccount(ctx context.Context, id int64) error {
+	_, err := d.ExecContext(ctx,
+		`UPDATE accounts SET deleted_at=?, enabled=0, updated_at=? WHERE id=?`,
+		NowUTC(), NowUTC(), id)
+	return err
+}
+
+// UpdateAccountAuth 重新授权回写：更新 RT 与 client_id（保留历史/基线）。
+func (d *DB) UpdateAccountAuth(ctx context.Context, id int64, rt, clientID string) error {
+	_, err := d.ExecContext(ctx,
+		`UPDATE accounts SET refresh_token=?, client_id=?, updated_at=? WHERE id=?`,
+		rt, clientID, NowUTC(), id)
 	return err
 }
 

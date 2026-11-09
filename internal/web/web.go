@@ -67,6 +67,7 @@ type pendingFlow struct {
 	Err        string
 	RT         string
 	Email      string // 授权实际绑定的账号（/me 识别）
+	AccountID  int64  // >0 表示重新授权回写（非新建）
 }
 
 // New 构建服务（version 供状态页展示）。
@@ -397,6 +398,18 @@ func (s *Server) handleAddAccount(w http.ResponseWriter, r *http.Request) {
 			if email == "" {
 				email = pf.Email // /me 识别的授权实际账号
 			}
+			if pf.AccountID > 0 {
+				delete(s.pending, ref)
+				s.mu.Unlock()
+				// 重新授权：回写现有账号，保留历史与基线
+				if err := s.db.UpdateAccountAuth(r.Context(), pf.AccountID, rt, cid); err != nil {
+					http.Redirect(w, r, "/account/"+strconv.FormatInt(pf.AccountID, 10)+"?flash="+urlq("回写失败: "+err.Error()), 303)
+					return
+				}
+				go s.sc.RunOnce(context.Background(), "manual", s.threshold(context.Background()), pf.AccountID)
+				http.Redirect(w, r, "/account/"+strconv.FormatInt(pf.AccountID, 10)+"?flash="+urlq("已重新授权 "+pf.Email+"，后台检查中"), 303)
+				return
+			}
 			delete(s.pending, ref)
 		}
 		s.mu.Unlock()
@@ -426,8 +439,13 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := strconv.ParseInt(r.FormValue("id"), 10, 64)
+	if r.FormValue("keep") == "1" {
+		_ = s.db.SoftDeleteAccount(r.Context(), id)
+		http.Redirect(w, r, "/accounts?flash="+urlq("已移除（历史数据已保留）"), 303)
+		return
+	}
 	_ = s.db.DeleteAccount(r.Context(), id)
-	http.Redirect(w, r, "/accounts?flash="+urlq("已删除"), 303)
+	http.Redirect(w, r, "/accounts?flash="+urlq("已彻底删除（含历史）"), 303)
 }
 
 func (s *Server) handleToggleAccount(w http.ResponseWriter, r *http.Request) {
@@ -741,10 +759,12 @@ func (s *Server) handleTokenStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := randToken()[:16]
+	acctID, _ := strconv.ParseInt(r.FormValue("account_id"), 10, 64)
 	pf := &pendingFlow{
 		ClientID:   cid,
 		DeviceCode: dc.DeviceCode,
 		ExpiresAt:  time.Now().Add(time.Duration(dc.ExpiresIn) * time.Second),
+		AccountID:  acctID,
 	}
 	s.mu.Lock()
 	// 顺手清理过期 pending

@@ -17,6 +17,46 @@
 <form method="post" action="/account/snapshot"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{.Data.A.ID}}"><button>重建规则基线</button></form>
 </div>
 
+<h3>重新授权（升级 scope / 更换凭据，保留历史与基线）</h3>
+<div class="card">
+<label class="dim">授权范围
+<select id="ra_scope">
+<option value="full" selected>完整（Graph + IMAP/SMTP 协议探测）</option>
+<option value="graph">标准（仅 Graph 检查）</option>
+</select></label>
+<button type="button" onclick="raStart()">发起重新授权</button>
+<div id="ra_step" style="display:none;margin-top:10px">
+<p>打开 <a id="ra_url" target="_blank" rel="noopener"></a> 输入代码 <b id="ra_code" class="mono"></b></p>
+<p id="ra_status" class="dim">等待授权…</p>
+</div>
+<form id="raForm" method="post" action="/accounts/add" style="display:none">
+<input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="token_ref" id="ra_ref">
+</form>
+</div>
+<script>
+let raID=null;
+async function raStart(){
+ const r=await fetch('/token/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+  body:'csrf='+encodeURIComponent('{{.CSRF}}')+'&account_id={{.Data.A.ID}}&scope='+encodeURIComponent(document.getElementById('ra_scope').value)});
+ const j=await r.json();
+ document.getElementById('ra_step').style.display='block';
+ if(j.err){document.getElementById('ra_status').textContent='失败: '+j.err;return}
+ raID=j.id;document.getElementById('ra_code').textContent=j.user_code;
+ const a=document.getElementById('ra_url');a.href=j.url;a.textContent=j.url;
+ setInterval(raPoll,3000);
+}
+async function raPoll(){
+ if(!raID)return;
+ const pr=await fetch('/token/poll?id='+raID);const pj=await pr.json();
+ if(!pj.done)return;
+ const st=document.getElementById('ra_status');
+ if(pj.err){st.innerHTML='<span class="err">'+pj.err+'</span>';raID=null;return}
+ document.getElementById('ra_ref').value=raID;
+ st.innerHTML='<b style="color:var(--ok)">已绑定 '+(pj.email||'')+'</b>，回写中…';
+ document.getElementById('raForm').submit();
+}
+</script>
+
 <h3>检查项开关</h3>
 <form method="post" action="/accounts/checks" class="checks">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
