@@ -16,7 +16,7 @@
 {{range .Data.Rows}}
 <tr>
 <td><a href="/account/{{.ID}}">{{mask .Email}}</a>{{if not .Enabled}} <span class="dim">(停用)</span>{{end}}</td>
-<td><span class="badge {{badge .Status}}">{{.Status}}</span></td>
+<td><span class="badge {{badge .Status}}">{{.Status}}</span>{{if and (eq .Status "degraded") (not .HasBaseline)}} <span class="dim" title="首轮检查缺基线属正常：进详情页建基线即可">·需建基线</span>{{end}}</td>
 <td>{{.ConsecutiveFail}}</td>
 <td class="dim">{{.LastCheckAt}}</td>
 </tr>

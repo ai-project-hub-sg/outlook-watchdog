@@ -19,7 +19,7 @@
 </div>
 
 <h2>添加账号</h2>
-<form method="post" action="/accounts/add" class="card">
+<form method="post" action="/accounts/add" class="card" id="addForm">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input type="hidden" name="token_ref" id="tk_ref">
 <div class="grid3">
@@ -55,11 +55,15 @@ async function tkPoll(){
  const r=await fetch('/token/poll?id='+tkID);const j=await r.json();
  const st=document.getElementById('tk_status');
  if(j.err){st.innerHTML='<span class="err">'+j.err+'</span>';clearInterval(tkTimer);return}
- if(j.done&&j.ok){st.innerHTML='<b style="color:var(--ok)">授权成功：已绑定 '+(j.email||'(未识别)')+'</b> ——请核对后提交添加';
+ if(j.done&&j.ok){
   document.getElementById('tk_ref').value=tkID;
   document.getElementById('add_client').value=document.getElementById('tk_client').value;
   if(j.email)document.getElementById('add_email').value=j.email;
-  clearInterval(tkTimer);}
+  clearInterval(tkTimer);
+  if(j.email){st.innerHTML='<b style="color:var(--ok)">授权成功：已绑定 '+j.email+'</b> ——正在自动添加…';
+   document.getElementById('addForm').submit();}
+  else{st.innerHTML='<b style="color:var(--ok)">授权成功，RT 已就绪</b>——未识别邮箱，请手动填写后提交';}
+ }
 }
 </script>
 
@@ -69,7 +73,7 @@ async function tkPoll(){
 {{range .Data.Rows}}
 <tr>
 <td><a href="/account/{{.ID}}">{{mask .Email}}</a></td>
-<td><span class="badge {{badge .Status}}">{{.Status}}</span></td>
+<td><span class="badge {{badge .Status}}">{{.Status}}</span>{{if and (eq .Status "degraded") (not .HasBaseline)}} <span class="dim" title="首轮检查缺基线属正常：进详情页建基线即可">·需建基线</span>{{end}}</td>
 <td class="dim mono">{{.RT}}</td>
 <td class="row">
 <form method="post" action="/account/check" class="inline">

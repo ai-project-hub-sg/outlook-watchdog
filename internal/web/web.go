@@ -303,6 +303,7 @@ type dashRow struct {
 	Status          string
 	ConsecutiveFail int
 	LastCheckAt     string
+	HasBaseline     bool
 }
 
 func (s *Server) pageDashboard(w http.ResponseWriter, r *http.Request) {
@@ -315,6 +316,8 @@ func (s *Server) pageDashboard(w http.ResponseWriter, r *http.Request) {
 		if st != nil {
 			row.Status, row.ConsecutiveFail, row.LastCheckAt = st.Status, st.ConsecutiveFail, st.LastCheckAt
 		}
+		_, sha, _ := s.db.GetRuleSnapshot(r.Context(), a.ID)
+		row.HasBaseline = sha != ""
 		if !a.Enabled {
 			disCnt++
 		} else if row.Status == "ok" {
@@ -337,8 +340,9 @@ func (s *Server) pageAccounts(w http.ResponseWriter, r *http.Request) {
 	accs, _ := s.db.ListAccounts(r.Context(), false)
 	type row struct {
 		*store.Account
-		RT     string
-		Status string
+		RT          string
+		Status      string
+		HasBaseline bool
 	}
 	rows := make([]row, 0, len(accs))
 	for _, a := range accs {
@@ -347,7 +351,8 @@ func (s *Server) pageAccounts(w http.ResponseWriter, r *http.Request) {
 		if st != nil {
 			status = st.Status
 		}
-		rows = append(rows, row{a, maskRT(a.RefreshToken), status})
+		_, sha, _ := s.db.GetRuleSnapshot(r.Context(), a.ID)
+		rows = append(rows, row{a, maskRT(a.RefreshToken), status, sha != ""})
 	}
 	defCID, _ := s.db.GetSetting(r.Context(), "app.client_id")
 	s.render(w, r, "accounts", map[string]any{"Rows": rows, "DefaultClientID": defCID})
@@ -404,7 +409,7 @@ func (s *Server) handleAddAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	// 新账号立即后台跑一轮，避免用户干等一个调度周期
 	go s.sc.RunOnce(context.Background(), "manual", s.threshold(context.Background()), id)
-	http.Redirect(w, r, "/accounts?flash="+urlq("已添加 "+email+"，后台检查中"), 303)
+	http.Redirect(w, r, "/accounts?flash="+urlq("已添加 "+email+"，后台检查中（首轮 degraded 提示缺规则基线属正常，进详情页建基线即可）"), 303)
 }
 
 func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
