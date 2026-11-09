@@ -397,11 +397,14 @@ func (s *Server) handleAddAccount(w http.ResponseWriter, r *http.Request) {
 		checks[c] = r.FormValue("chk_"+c) == "on"
 	}
 	a := &store.Account{Email: email, ClientID: cid, RefreshToken: rt, Checks: checks, Enabled: true}
-	if _, err := s.db.AddAccount(r.Context(), a); err != nil {
+	id, err := s.db.AddAccount(r.Context(), a)
+	if err != nil {
 		http.Redirect(w, r, "/accounts?flash="+urlq("添加失败: "+err.Error()), 303)
 		return
 	}
-	http.Redirect(w, r, "/accounts?flash="+urlq("已添加 "+email), 303)
+	// 新账号立即后台跑一轮，避免用户干等一个调度周期
+	go s.sc.RunOnce(context.Background(), "manual", s.threshold(context.Background()), id)
+	http.Redirect(w, r, "/accounts?flash="+urlq("已添加 "+email+"，后台检查中"), 303)
 }
 
 func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
@@ -466,7 +469,11 @@ func (s *Server) handleCheckNow(w http.ResponseWriter, r *http.Request) {
 	}
 	id, _ := strconv.ParseInt(r.FormValue("id"), 10, 64)
 	go s.sc.RunOnce(context.Background(), "manual", s.threshold(r.Context()), id)
-	http.Redirect(w, r, "/account/"+strconv.FormatInt(id, 10)+"?flash="+urlq("已触发检查（稍后刷新查看）"), 303)
+	back := "/account/" + strconv.FormatInt(id, 10)
+	if r.FormValue("back") == "list" {
+		back = "/accounts"
+	}
+	http.Redirect(w, r, back+"?flash="+urlq("已触发检查（稍后刷新查看）"), 303)
 }
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {

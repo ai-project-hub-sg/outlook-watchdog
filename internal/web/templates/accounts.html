@@ -71,15 +71,19 @@ async function tkPoll(){
 <td><a href="/account/{{.ID}}">{{mask .Email}}</a></td>
 <td><span class="badge {{badge .Status}}">{{.Status}}</span></td>
 <td class="dim mono">{{.RT}}</td>
-<td>
+<td class="row">
+<form method="post" action="/account/check" class="inline">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<input type="hidden" name="id" value="{{.ID}}">
+<input type="hidden" name="back" value="list">
+<button class="link">立即检查</button>
+</form>
 <form method="post" action="/accounts/toggle" class="inline">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <input type="hidden" name="id" value="{{.ID}}">
 <input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}">
 <button class="link">{{if .Enabled}}停用{{else}}启用{{end}}</button>
 </form>
-</td>
-<td>
 <form method="post" action="/accounts/delete" class="inline" onsubmit="return confirm('确认删除该账号及其历史数据？')">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <input type="hidden" name="id" value="{{.ID}}">

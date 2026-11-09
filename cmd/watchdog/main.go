@@ -340,7 +340,9 @@ func cmdAccount(ctx context.Context, cfg *config.Config, args []string) int {
 		}
 		id, err := db.AddAccount(ctx, &store.Account{
 			Email: *email, ClientID: *clientID, RefreshToken: rt, Proxy: *proxy,
-			Checks: map[string]bool{"rules": true}, Enabled: true,
+			Checks: map[string]bool{
+				"c1_token": true, "c2_me": true, "c3_recv": true, "c5_rules": true,
+			}, Enabled: true,
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "add:", err)

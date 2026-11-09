@@ -82,7 +82,7 @@ func (r *Runner) RunAccount(ctx context.Context, a *store.Account, trigger strin
 	}
 
 	// ---- C5: rules 审计（默认开） ----
-	if a.Checks == nil || a.Checks["rules"] {
+	if a.Checks == nil || a.Checks["c5_rules"] || a.Checks["rules"] {
 		cr := r.checkRules(ctx, a, gc)
 		out.Results = append(out.Results, cr)
 		_ = r.Store.AddResult(ctx, runPK, &cr)
