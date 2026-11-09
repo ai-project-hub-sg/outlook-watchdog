@@ -777,6 +777,9 @@ func (s *Server) handleTokenStart(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	go func() {
 		rt, err := msauth.New().PollDeviceCode(context.Background(), cid, dc.DeviceCode, dc.Interval)
+		if err != nil && strings.Contains(err.Error(), "invalid_scope") {
+			err = fmt.Errorf("invalid_scope：该 client_id 应用未注册协议权限——自建 Entra 应用并加 Office 365 Exchange Online 的 IMAP.AccessAsUser.All+SMTP.Send，或改用「标准」授权")
+		}
 		if err == nil {
 			// 授权成功：识别实际绑定的账号（device flow 签给浏览器会话里的
 			// 微软账号，可能与用户预期不同），并采用轮换后的 RT。
