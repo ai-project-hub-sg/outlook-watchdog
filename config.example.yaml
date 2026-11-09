@@ -1,0 +1,9 @@
+# outlook-watchdog 引导配置（业务数据全部在 SQLite，此文件只管进程级项）
+# 复制为 config.yaml 使用；config.yaml 已在 .gitignore
+
+listen: 127.0.0.1:8080      # WebUI 监听地址；对外访问请走 HTTPS 反代，勿直接挂公网
+data_dir: data/             # SQLite 所在目录（自动 0700）
+log_dir: logs/              # 运行日志目录
+
+# 可选：管理员密码（存哈希入库）。支持 ${ENV_VAR} 展开；留空则首启进 setup 页
+# admin_password: ${WATCHDOG_ADMIN_PASSWORD}

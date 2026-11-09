@@ -1,0 +1,1 @@
+{"error":"invalid_grant","error_description":"AADSTS50053: The account is locked, you've tried to sign in too many times with an incorrect user ID or password.","error_codes":[50053],"timestamp":"2026-11-09 12:00:00Z"}

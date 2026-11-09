@@ -28,6 +28,14 @@ go.work.sum
 # env file
 .env
 
+# watchdog runtime & secrets
+config.yaml
+*.local.yaml
+data/
+logs/
+bin/
+dist/
+
 # Editor/IDE
 # .idea/
 # .vscode/

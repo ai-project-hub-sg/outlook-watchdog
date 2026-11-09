@@ -1,0 +1,334 @@
+// Package store 提供 SQLite 持久化：连接、迁移、各表 DAO。
+// SQLite 是运行时唯一权威数据源（docs/design.md §8）。
+package store
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+// DB 包装 *sql.DB。
+type DB struct {
+	*sql.DB
+}
+
+// Account 对应 accounts 表。
+type Account struct {
+	ID           int64           `json:"id"`
+	Email        string          `json:"email"`
+	ClientID     string          `json:"client_id"`
+	RefreshToken string          `json:"-"` // 不随 JSON 输出
+	Proxy        string          `json:"proxy"`
+	Checks       map[string]bool `json:"checks"`
+	Enabled      bool            `json:"enabled"`
+	CreatedAt    string          `json:"created_at"`
+	UpdatedAt    string          `json:"updated_at"`
+}
+
+// State 对应 account_state 表。
+type State struct {
+	AccountID       int64  `json:"account_id"`
+	Status          string `json:"status"`
+	ConsecutiveFail int    `json:"consecutive_fail"`
+	LastCheckAt     string `json:"last_check_at"`
+	LastAlertAt     string `json:"last_alert_at"`
+	LastAlertStatus string `json:"last_alert_status"`
+}
+
+// CheckResult 对应 check_results 表。
+type CheckResult struct {
+	Check          string `json:"check"`
+	Result         string `json:"result"` // pass|fail|unavailable|error
+	Classification string `json:"classification"`
+	Detail         string `json:"detail"` // 脱敏摘要
+	DurationMS     int64  `json:"duration_ms"`
+}
+
+// Open 打开（必要时创建）SQLite 并执行迁移。
+func Open(path string) (*DB, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)", path)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1) // SQLite 单写者
+	d := &DB{db}
+	if err := d.migrate(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return d, nil
+}
+
+// migrate 应用 migrations/ 下未执行的 NNN_*.sql（按文件名排序）。
+func (d *DB) migrate() error {
+	names, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		return err
+	}
+	sort.Slice(names, func(i, j int) bool { return names[i].Name() < names[j].Name() })
+
+	var cur int
+	row := d.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_version`)
+	if err := row.Scan(&cur); err != nil {
+		// schema_version 表可能尚不存在（全新库）——先跑全部迁移
+		cur = 0
+	}
+
+	for _, n := range names {
+		base := strings.TrimSuffix(n.Name(), ".sql")
+		num, err := strconv.Atoi(strings.SplitN(base, "_", 2)[0])
+		if err != nil || num <= cur {
+			continue
+		}
+		body, err := migrationsFS.ReadFile("migrations/" + n.Name())
+		if err != nil {
+			return err
+		}
+		tx, err := d.Begin()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(string(body)); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("migration %s: %w", n.Name(), err)
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, num); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("migration %s version bump: %w", n.Name(), err)
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ---- accounts ----
+
+// AddAccount 新增账号并初始化 account_state。
+func (d *DB) AddAccount(ctx context.Context, a *Account) (int64, error) {
+	cj, err := json.Marshal(a.Checks)
+	if err != nil {
+		return 0, err
+	}
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO accounts(email, client_id, refresh_token, proxy, checks_json, enabled)
+		 VALUES (?,?,?,?,?,?)`,
+		a.Email, a.ClientID, a.RefreshToken, a.Proxy, string(cj), a.Enabled)
+	if err != nil {
+		return 0, err
+	}
+	id, _ := res.LastInsertId()
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO account_state(account_id, status) VALUES (?, 'unknown')`, id); err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
+}
+
+// GetAccount 按 id 或 email 取账号。
+func (d *DB) GetAccount(ctx context.Context, idOrEmail string) (*Account, error) {
+	q := `SELECT id,email,client_id,refresh_token,proxy,checks_json,enabled,created_at,updated_at FROM accounts WHERE `
+	var arg any
+	if id, err := strconv.ParseInt(idOrEmail, 10, 64); err == nil {
+		q += `id=?`
+		arg = id
+	} else {
+		q += `email=?`
+		arg = idOrEmail
+	}
+	var a Account
+	var cj string
+	err := d.QueryRowContext(ctx, q, arg).Scan(
+		&a.ID, &a.Email, &a.ClientID, &a.RefreshToken, &a.Proxy, &cj,
+		&a.Enabled, &a.CreatedAt, &a.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(cj), &a.Checks); err != nil {
+		a.Checks = map[string]bool{}
+	}
+	return &a, nil
+}
+
+// ListAccounts 返回全部账号（enabledOnly 时仅启用）。
+func (d *DB) ListAccounts(ctx context.Context, enabledOnly bool) ([]*Account, error) {
+	q := `SELECT id,email,client_id,refresh_token,proxy,checks_json,enabled,created_at,updated_at FROM accounts`
+	if enabledOnly {
+		q += ` WHERE enabled=1`
+	}
+	q += ` ORDER BY id`
+	rows, err := d.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Account
+	for rows.Next() {
+		var a Account
+		var cj string
+		if err := rows.Scan(&a.ID, &a.Email, &a.ClientID, &a.RefreshToken, &a.Proxy,
+			&cj, &a.Enabled, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, err
+		}
+		json.Unmarshal([]byte(cj), &a.Checks)
+		out = append(out, &a)
+	}
+	return out, rows.Err()
+}
+
+// UpdateRefreshToken 在事务内写回轮换后的新 RT（RT 轮换持久化，AGENTS.md §4.3.3）。
+func (d *DB) UpdateRefreshToken(ctx context.Context, accountID int64, newRT string) error {
+	_, err := d.ExecContext(ctx,
+		`UPDATE accounts SET refresh_token=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?`,
+		newRT, accountID)
+	return err
+}
+
+// UpdateAccountChecks 更新检查开关。
+func (d *DB) UpdateAccountChecks(ctx context.Context, id int64, checks map[string]bool) error {
+	cj, err := json.Marshal(checks)
+	if err != nil {
+		return err
+	}
+	_, err = d.ExecContext(ctx,
+		`UPDATE accounts SET checks_json=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?`,
+		string(cj), id)
+	return err
+}
+
+// DeleteAccount 删除账号（级联删除状态/基线/历史）。
+func (d *DB) DeleteAccount(ctx context.Context, id int64) error {
+	_, err := d.ExecContext(ctx, `DELETE FROM accounts WHERE id=?`, id)
+	return err
+}
+
+// ---- account_state ----
+
+// GetState 取账号当前状态；无记录时返回 unknown。
+func (d *DB) GetState(ctx context.Context, accountID int64) (*State, error) {
+	var s State
+	err := d.QueryRowContext(ctx,
+		`SELECT account_id,status,consecutive_fail,
+		        COALESCE(last_check_at,''),COALESCE(last_alert_at,''),COALESCE(last_alert_status,'')
+		 FROM account_state WHERE account_id=?`, accountID).
+		Scan(&s.AccountID, &s.Status, &s.ConsecutiveFail, &s.LastCheckAt, &s.LastAlertAt, &s.LastAlertStatus)
+	if err == sql.ErrNoRows {
+		return &State{AccountID: accountID, Status: "unknown"}, nil
+	}
+	return &s, err
+}
+
+// SetState 更新账号状态。
+func (d *DB) SetState(ctx context.Context, s *State) error {
+	_, err := d.ExecContext(ctx,
+		`INSERT INTO account_state(account_id,status,consecutive_fail,last_check_at,last_alert_at,last_alert_status)
+		 VALUES (?,?,?,?,?,?)
+		 ON CONFLICT(account_id) DO UPDATE SET
+		   status=excluded.status, consecutive_fail=excluded.consecutive_fail,
+		   last_check_at=excluded.last_check_at,
+		   last_alert_at=excluded.last_alert_at, last_alert_status=excluded.last_alert_status`,
+		s.AccountID, s.Status, s.ConsecutiveFail, s.LastCheckAt, s.LastAlertAt, s.LastAlertStatus)
+	return err
+}
+
+// ---- rule_snapshots ----
+
+// SaveRuleSnapshot 建立/覆盖 rules 基线。
+func (d *DB) SaveRuleSnapshot(ctx context.Context, accountID int64, rulesJSON, sha string) error {
+	_, err := d.ExecContext(ctx,
+		`INSERT INTO rule_snapshots(account_id,rules_json,sha256,taken_at)
+		 VALUES (?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		 ON CONFLICT(account_id) DO UPDATE SET
+		   rules_json=excluded.rules_json, sha256=excluded.sha256, taken_at=excluded.taken_at`,
+		accountID, rulesJSON, sha)
+	return err
+}
+
+// GetRuleSnapshot 取基线；无则返回 nil,nil。
+func (d *DB) GetRuleSnapshot(ctx context.Context, accountID int64) (rulesJSON, sha string, err error) {
+	err = d.QueryRowContext(ctx,
+		`SELECT rules_json,sha256 FROM rule_snapshots WHERE account_id=?`, accountID).
+		Scan(&rulesJSON, &sha)
+	if err == sql.ErrNoRows {
+		return "", "", nil
+	}
+	return rulesJSON, sha, err
+}
+
+// ---- check_runs / check_results ----
+
+// StartRun 开启一次检查运行，返回 run 主键 id。
+func (d *DB) StartRun(ctx context.Context, accountID int64, runID, source string) (int64, error) {
+	res, err := d.ExecContext(ctx,
+		`INSERT INTO check_runs(account_id,run_id,source) VALUES (?,?,?)`, accountID, runID, source)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// FinishRun 结束运行并写入账号级状态。
+func (d *DB) FinishRun(ctx context.Context, runPK int64, status string) error {
+	_, err := d.ExecContext(ctx,
+		`UPDATE check_runs SET finished_at=strftime('%Y-%m-%dT%H:%M:%SZ','now'), status=? WHERE id=?`,
+		status, runPK)
+	return err
+}
+
+// AddResult 记录单个检查结果。
+func (d *DB) AddResult(ctx context.Context, runPK int64, r *CheckResult) error {
+	_, err := d.ExecContext(ctx,
+		`INSERT INTO check_results(run_id,check_name,result,classification,detail,duration_ms)
+		 VALUES (?,?,?,?,?,?)`,
+		runPK, r.Check, r.Result, r.Classification, r.Detail, r.DurationMS)
+	return err
+}
+
+// ---- settings ----
+
+// GetSetting 取设置项；无则返回 ""。
+func (d *DB) GetSetting(ctx context.Context, key string) (string, error) {
+	var v string
+	err := d.QueryRowContext(ctx, `SELECT value FROM settings WHERE key=?`, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return v, err
+}
+
+// SetSetting 写设置项。
+func (d *DB) SetSetting(ctx context.Context, key, value string) error {
+	_, err := d.ExecContext(ctx,
+		`INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+		key, value)
+	return err
+}
+
+// NowUTC 返回 ISO8601 UTC 时间戳（与 SQLite 默认值同格式）。
+func NowUTC() string {
+	return time.Now().UTC().Format("2006-01-02T15:04:05Z")
+}

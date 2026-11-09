@@ -1,0 +1,1 @@
+{"error":"invalid_client","error_description":"AADSTS7000218: The request body must contain the following parameter: 'client_assertion' or 'client_secret'.","error_codes":[7000218],"timestamp":"2026-11-09 12:00:00Z"}
