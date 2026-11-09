@@ -54,3 +54,16 @@
 | offline_access | 7427e0e9-2fba-42fe-b0c0-848c9e6a8182 | Graph |
 | IMAP.AccessAsUser.All | 652390e4-393a-48de-948d-67205b21a982 | Exchange Online |
 | SMTP.Send | 258f6539-9087-4fdd-bfb9-ea5f61e48f31 | Exchange Online |
+
+## 实测结论（2026-11-09）
+
+- 自建 app（signInAudience=AzureADandPersonalMicrosoftAccount + public client）+ **动态 consent** 可行：
+  「完整」授权的同意页能列出 IMAP/SMTP 权限，token 端点可兑换
+  `https://outlook.office.com/IMAP.AccessAsUser.All`、`https://outlook.office.com/SMTP.Send`。
+- **scope 必须用全限定 URI** 兑换（`https://outlook.office.com/...`）；
+  裸名 `IMAP.AccessAsUser.All` 也能签发但服务端不认（IMAP `NO AUTHENTICATE failed`）。
+- `requiredResourceAccess` 不声明也能跑（动态 consent）；门户 manifest 编辑器
+  对 EXO 资源块会报"必需资源访问权限无效"（租户无 EXO service principal 时），无需理会。
+- **C7 SMTP 对个人邮箱不可用**：`smtp.office365.com`/`smtp-mail.outlook.com` 均回
+  `535 SmtpClientAuthentication is disabled`——消费版 mailbox 无开关，属平台限制，
+  已映射为 `unavailable/smtp_disabled`。C6 IMAP 正常（`xoauth2 ok`）。
