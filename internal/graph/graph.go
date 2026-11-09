@@ -123,3 +123,49 @@ func (c *Client) SendMail(ctx context.Context, to, subject, body string) (*CallR
 	rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	return &CallResult{StatusCode: resp.StatusCode, Body: rbody}, nil
 }
+
+// RecentMessage 是收件箱最近邮件的精简视图（roundtrip 探测用）。
+type RecentMessage struct {
+	ID       string `json:"id"`
+	Subject  string `json:"subject"`
+	Received string `json:"receivedDateTime"`
+}
+
+// RecentInbox 取收件箱最近 top 封（仅 id/subject/receivedDateTime）。
+func (c *Client) RecentInbox(ctx context.Context, top int) ([]RecentMessage, int, error) {
+	res, err := c.get(ctx, fmt.Sprintf(
+		"/me/mailFolders/inbox/messages?%%24top=%d&%%24select=id,subject,receivedDateTime&%%24orderby=receivedDateTime%%20desc", top))
+	if err != nil {
+		return nil, 0, err
+	}
+	if res.StatusCode != http.StatusOK {
+		return nil, res.StatusCode, nil
+	}
+	var payload struct {
+		Value []RecentMessage `json:"value"`
+	}
+	if err := json.Unmarshal(res.Body, &payload); err != nil {
+		return nil, res.StatusCode, fmt.Errorf("parse inbox: %w", err)
+	}
+	return payload.Value, res.StatusCode, nil
+}
+
+// DeleteMessage 删除指定邮件（roundtrip 清理探测信）。
+func (c *Client) DeleteMessage(ctx context.Context, id string) (*CallResult, error) {
+	base := c.Base
+	if base == "" {
+		base = baseURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, base+"/me/messages/"+id, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return &CallResult{StatusCode: resp.StatusCode, Body: body}, nil
+}

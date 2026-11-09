@@ -372,7 +372,10 @@ func (s *Server) defaultClientID(ctx context.Context, formVal string) string {
 	return v
 }
 
-var knownChecks = []string{"c1_token", "c2_me", "c3_recv", "c5_rules"}
+var knownChecks = []string{
+	"c1_token", "c2_me", "c3_recv", "c5_rules",
+	"c4_send", "c6_imap", "c7_smtp", "c8_roundtrip",
+}
 
 func (s *Server) handleAddAccount(w http.ResponseWriter, r *http.Request) {
 	if !s.csrfCheck(r) {

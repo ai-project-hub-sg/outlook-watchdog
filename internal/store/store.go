@@ -509,6 +509,20 @@ func (d *DB) listResults(ctx context.Context, runPK int64) ([]CheckResult, error
 	return out, rows.Err()
 }
 
+// LastCheckTime 返回某账号某检查项最近一次运行的开始时间（C8 限频用）。
+func (d *DB) LastCheckTime(ctx context.Context, accountID int64, checkName string) (string, error) {
+	var ts string
+	err := d.QueryRowContext(ctx,
+		`SELECT r.started_at FROM check_results cr
+		 JOIN check_runs r ON r.id=cr.run_id
+		 WHERE r.account_id=? AND cr.check_name=?
+		 ORDER BY cr.id DESC LIMIT 1`, accountID, checkName).Scan(&ts)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return ts, err
+}
+
 // GlobalRun 是跨账号的一次运行（日志查询页用）。
 type GlobalRun struct {
 	ID         int64  `json:"id"`

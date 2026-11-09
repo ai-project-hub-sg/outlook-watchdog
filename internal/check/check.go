@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"outlook-watchdog/internal/classify"
 	"outlook-watchdog/internal/graph"
 	"outlook-watchdog/internal/msauth"
+	"outlook-watchdog/internal/probe"
 	"outlook-watchdog/internal/store"
 )
 
@@ -88,7 +90,122 @@ func (r *Runner) RunAccount(ctx context.Context, a *store.Account, trigger strin
 		_ = r.Store.AddResult(ctx, runPK, &cr)
 	}
 
+	// ---- C4: 发信能力（默认关；真实发信到自己） ----
+	if a.Checks["c4_send"] {
+		cr := r.checkSend(ctx, a, gc)
+		out.Results = append(out.Results, cr)
+		_ = r.Store.AddResult(ctx, runPK, &cr)
+	}
+
+	// ---- C6/C7: 协议探测（默认关；scope 不足→unavailable） ----
+	if a.Checks["c6_imap"] {
+		cr := r.checkProto(ctx, a, "c6_imap", "IMAP.AccessAsUser.All", "outlook.office365.com", probe.IMAP)
+		out.Results = append(out.Results, cr)
+		_ = r.Store.AddResult(ctx, runPK, &cr)
+	}
+	if a.Checks["c7_smtp"] {
+		cr := r.checkProto(ctx, a, "c7_smtp", "SMTP.Send", "smtp.office365.com", probe.SMTP)
+		out.Results = append(out.Results, cr)
+		_ = r.Store.AddResult(ctx, runPK, &cr)
+	}
+
+	// ---- C8: roundtrip（默认关；≥30min 限频，未到跳过） ----
+	if a.Checks["c8_roundtrip"] {
+		if last, _ := r.Store.LastCheckTime(ctx, a.ID, "c8_roundtrip"); last != "" {
+			if t, err := time.Parse("2006-01-02T15:04:05Z", last); err == nil && time.Since(t) < 30*time.Minute {
+				return out, nil
+			}
+		}
+		cr := r.checkRoundtrip(ctx, a, gc)
+		out.Results = append(out.Results, cr)
+		_ = r.Store.AddResult(ctx, runPK, &cr)
+	}
+
 	return out, nil
+}
+
+// checkSend 用 Graph sendMail 给自己发一封，仅验证发信能力。
+func (r *Runner) checkSend(ctx context.Context, a *store.Account, gc *graph.Client) store.CheckResult {
+	start := time.Now()
+	res := store.CheckResult{Check: "c4_send"}
+	cr, err := gc.SendMail(ctx, a.Email, "[watchdog-probe] send capability "+store.NowUTC(), "send capability probe")
+	res.DurationMS = time.Since(start).Milliseconds()
+	if err != nil {
+		c := classify.ClassifyNetworkError(err)
+		res.Result, res.Classification, res.Detail = "error", string(c.Classification), c.Detail
+		return res
+	}
+	res.Result, res.Classification, res.Detail = classifyGraphStatus(cr.StatusCode, cr.Body)
+	return res
+}
+
+// checkProto 协议探测通用骨架：scope 不足 → unavailable（status-codes §3）。
+func (r *Runner) checkProto(ctx context.Context, a *store.Account, name, scope, host string,
+	fn func(context.Context, string, string, string) error) store.CheckResult {
+	start := time.Now()
+	res := store.CheckResult{Check: name}
+	at := ""
+	if r.lastGrant != nil {
+		at = r.lastGrant.AccessToken
+	}
+	if !probe.TokenHasScope(at, scope) {
+		res.Result, res.Classification, res.Detail = "unavailable", "scope_missing", "token 无 "+scope+"（需协议授权）"
+		res.DurationMS = time.Since(start).Milliseconds()
+		return res
+	}
+	if err := fn(ctx, host, a.Email, at); err != nil {
+		res.Result, res.Classification, res.Detail = "fail", "auth_failed", truncateStr(err.Error(), 120)
+	} else {
+		res.Result, res.Classification, res.Detail = "pass", "ok", "xoauth2 ok"
+	}
+	res.DurationMS = time.Since(start).Milliseconds()
+	return res
+}
+
+// checkRoundtrip 端到端：发唯一标记信给自己 → 轮询收件箱命中 → 删除探信。
+func (r *Runner) checkRoundtrip(ctx context.Context, a *store.Account, gc *graph.Client) store.CheckResult {
+	start := time.Now()
+	res := store.CheckResult{Check: "c8_roundtrip"}
+	marker := fmt.Sprintf("[wd-probe] %d", time.Now().UnixNano())
+	cr, err := gc.SendMail(ctx, a.Email, marker, "watchdog roundtrip probe")
+	if err != nil {
+		c := classify.ClassifyNetworkError(err)
+		res.Result, res.Classification, res.Detail = "error", string(c.Classification), c.Detail
+		return res
+	}
+	if cr.StatusCode < 200 || cr.StatusCode >= 300 {
+		res.Result, res.Classification, res.Detail = classifyGraphStatus(cr.StatusCode, cr.Body)
+		res.Detail = "sendMail: " + res.Detail
+		res.DurationMS = time.Since(start).Milliseconds()
+		return res
+	}
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			res.Result, res.Classification, res.Detail = "error", "network", "ctx canceled"
+			res.DurationMS = time.Since(start).Milliseconds()
+			return res
+		case <-time.After(10 * time.Second):
+		}
+		msgs, status, err := gc.RecentInbox(ctx, 10)
+		if err != nil || status != 200 {
+			continue
+		}
+		for _, m := range msgs {
+			if strings.Contains(m.Subject, marker) {
+				lat := time.Since(start).Milliseconds()
+				_, _ = gc.DeleteMessage(ctx, m.ID) // 清理探信，失败不计较
+				res.Result, res.Classification, res.Detail = "pass", "ok",
+					fmt.Sprintf("roundtrip ok latency=%dms", lat)
+				res.DurationMS = lat
+				return res
+			}
+		}
+	}
+	res.Result, res.Classification, res.Detail = "fail", "roundtrip_timeout", "90s 内未收到探信"
+	res.DurationMS = time.Since(start).Milliseconds()
+	return res
 }
 
 // checkToken 执行 C1。

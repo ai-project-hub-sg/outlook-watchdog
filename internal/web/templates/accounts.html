@@ -32,7 +32,12 @@
 <label><input type="checkbox" name="chk_c2_me" checked> c2_me</label>
 <label><input type="checkbox" name="chk_c3_recv" checked> c3_recv</label>
 <label><input type="checkbox" name="chk_c5_rules" checked> c5_rules</label>
+<label title="真实发信到自己"><input type="checkbox" name="chk_c4_send"> c4_send⚠</label>
+<label title="需 IMAP scope"><input type="checkbox" name="chk_c6_imap"> c6_imap</label>
+<label title="需 SMTP scope"><input type="checkbox" name="chk_c7_smtp"> c7_smtp</label>
+<label title="发信+收信闭环，≥30min 限频"><input type="checkbox" name="chk_c8_roundtrip"> c8_roundtrip⚠</label>
 </div>
+<p class="dim">⚠ 项会真实发信（发给自己，roundtrip 探信自动删除）。</p>
 <button>添加</button>
 <p class="dim">RT 也可留空——先在上方完成「在线获取授权」再提交即可（token 不出现在页面中）。</p>
 </form>
