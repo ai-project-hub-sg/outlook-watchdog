@@ -731,7 +731,11 @@ func (s *Server) handleTokenStart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"err": "client_id 必填（或在设置页配置默认）"})
 		return
 	}
-	dc, err := msauth.New().StartDeviceCode(r.Context(), cid, msauth.GraphScope)
+	scope := msauth.GraphScope
+	if r.FormValue("scope") == "full" {
+		scope = msauth.FullScope
+	}
+	dc, err := msauth.New().StartDeviceCode(r.Context(), cid, scope)
 	if err != nil {
 		writeJSON(w, 502, map[string]any{"err": "devicecode: " + err.Error()})
 		return

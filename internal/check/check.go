@@ -139,21 +139,29 @@ func (r *Runner) checkSend(ctx context.Context, a *store.Account, gc *graph.Clie
 	return res
 }
 
-// checkProto 协议探测通用骨架：scope 不足 → unavailable（status-codes §3）。
+// checkProto 协议探测通用骨架：RT 按需兑换协议资源 AT（子集赎回）；
+// 兑换失败（未同意该 scope）→ unavailable（status-codes §3）。
 func (r *Runner) checkProto(ctx context.Context, a *store.Account, name, scope, host string,
 	fn func(context.Context, string, string, string) error) store.CheckResult {
 	start := time.Now()
 	res := store.CheckResult{Check: name}
-	at := ""
-	if r.lastGrant != nil {
-		at = r.lastGrant.AccessToken
-	}
-	if !probe.TokenHasScope(at, scope) {
-		res.Result, res.Classification, res.Detail = "unavailable", "scope_missing", "token 无 "+scope+"（需协议授权）"
+	g, err := r.Auth.RefreshTokenGrant(ctx, a.ClientID, a.RefreshToken, scope+" offline_access")
+	if err != nil {
+		c := classify.ClassifyNetworkError(err)
+		res.Result, res.Classification, res.Detail = "error", string(c.Classification), c.Detail
 		res.DurationMS = time.Since(start).Milliseconds()
 		return res
 	}
-	if err := fn(ctx, host, a.Email, at); err != nil {
+	if !g.OK {
+		res.Result, res.Classification, res.Detail = "unavailable", "scope_missing",
+			scope+" 未同意（重新授权选「完整」可覆盖）"
+		res.DurationMS = time.Since(start).Milliseconds()
+		return res
+	}
+	if g.NewRefreshToken != "" {
+		_ = r.Store.UpdateRefreshToken(ctx, a.ID, g.NewRefreshToken)
+	}
+	if err := fn(ctx, host, a.Email, g.AccessToken); err != nil {
 		res.Result, res.Classification, res.Detail = "fail", "auth_failed", truncateStr(err.Error(), 120)
 	} else {
 		res.Result, res.Classification, res.Detail = "pass", "ok", "xoauth2 ok"

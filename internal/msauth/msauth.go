@@ -21,6 +21,13 @@ const DefaultAuthority = "https://login.microsoftonline.com/consumers/oauth2/v2.
 // GraphScope 常规检查所需的最小 scope 集合。
 const GraphScope = "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/MailboxSettings.Read offline_access"
 
+// ProtocolScope 协议探测（IMAP/SMTP XOAUTH2）所需 scope 集合。
+const ProtocolScope = "https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access"
+
+// FullScope Graph + 协议一次授权全集：v2 端点允许混合资源 scope，
+// RT 记录全部同意范围，检查时按子集兑换不同资源的 access token。
+const FullScope = GraphScope + " " + ProtocolScope
+
 // Client 是可注入 http.Client 的 grant 客户端。
 type Client struct {
 	HTTP      *http.Client
