@@ -14,6 +14,7 @@
 2. 输入代码 <b id="tk_code" class="mono" style="font-size:18px"></b><br>
 3. 用要监控的 Outlook 账号登录并同意授权</p>
 <p id="tk_status" class="dim">等待授权…</p>
+<p class="dim">提示：授权签给你在微软页面登录的那个账号——若浏览器已是其他账号会话，请先在微软页退出或换无痕窗口再授权。</p>
 </div>
 </div>
 
@@ -22,7 +23,7 @@
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input type="hidden" name="token_ref" id="tk_ref">
 <div class="grid3">
-<label>邮箱 <input name="email" type="email" required placeholder="x@outlook.com"></label>
+<label>邮箱 <input name="email" id="add_email" type="email" placeholder="授权后自动填入"></label>
 <label>Client ID（留空用默认/授权所用）<input name="client_id" id="add_client" placeholder="{{.Data.DefaultClientID}}"></label>
 <label>Refresh Token <input name="refresh_token" id="add_rt" type="password" autocomplete="off" placeholder="网页授权或手工粘贴"></label>
 </div>
@@ -54,9 +55,10 @@ async function tkPoll(){
  const r=await fetch('/token/poll?id='+tkID);const j=await r.json();
  const st=document.getElementById('tk_status');
  if(j.err){st.innerHTML='<span class="err">'+j.err+'</span>';clearInterval(tkTimer);return}
- if(j.done&&j.ok){st.innerHTML='<b style="color:var(--ok)">授权成功，RT 已就绪——请直接在下方提交添加</b>';
+ if(j.done&&j.ok){st.innerHTML='<b style="color:var(--ok)">授权成功：已绑定 '+(j.email||'(未识别)')+'</b> ——请核对后提交添加';
   document.getElementById('tk_ref').value=tkID;
   document.getElementById('add_client').value=document.getElementById('tk_client').value;
+  if(j.email)document.getElementById('add_email').value=j.email;
   clearInterval(tkTimer);}
 }
 </script>

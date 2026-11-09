@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -23,6 +24,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"outlook-watchdog/internal/check"
+	"outlook-watchdog/internal/graph"
 	"outlook-watchdog/internal/msauth"
 	"outlook-watchdog/internal/sched"
 	"outlook-watchdog/internal/store"
@@ -63,6 +65,7 @@ type pendingFlow struct {
 	Done       bool
 	Err        string
 	RT         string
+	Email      string // 授权实际绑定的账号（/me 识别）
 }
 
 // New 构建服务（version 供状态页展示）。
@@ -378,6 +381,9 @@ func (s *Server) handleAddAccount(w http.ResponseWriter, r *http.Request) {
 			if strings.TrimSpace(r.FormValue("client_id")) == "" {
 				cid = pf.ClientID
 			}
+			if email == "" {
+				email = pf.Email // /me 识别的授权实际账号
+			}
 			delete(s.pending, ref)
 		}
 		s.mu.Unlock()
@@ -638,6 +644,28 @@ func (s *Server) handleTokenStart(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	go func() {
 		rt, err := msauth.New().PollDeviceCode(context.Background(), cid, dc.DeviceCode, dc.Interval)
+		if err == nil {
+			// 授权成功：识别实际绑定的账号（device flow 签给浏览器会话里的
+			// 微软账号，可能与用户预期不同），并采用轮换后的 RT。
+			g, gerr := msauth.New().RefreshTokenGrant(context.Background(), cid, rt, msauth.GraphScope)
+			if gerr == nil && g.OK {
+				if g.NewRefreshToken != "" {
+					rt = g.NewRefreshToken
+				}
+				if me, merr := graph.New(g.AccessToken).Me(context.Background()); merr == nil && me.StatusCode == 200 {
+					var v struct {
+						Mail              string `json:"mail"`
+						UserPrincipalName string `json:"userPrincipalName"`
+					}
+					if json.Unmarshal(me.Body, &v) == nil {
+						pf.Email = v.Mail
+						if pf.Email == "" {
+							pf.Email = v.UserPrincipalName
+						}
+					}
+				}
+			}
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		pf.Done = true
@@ -667,6 +695,7 @@ func (s *Server) handleTokenPoll(w http.ResponseWriter, r *http.Request) {
 			out["err"] = pf.Err
 		} else {
 			out["ok"] = true
+			out["email"] = pf.Email
 		}
 	}
 	writeJSON(w, 200, out)
