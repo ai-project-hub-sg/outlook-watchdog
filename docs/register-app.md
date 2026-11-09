@@ -15,7 +15,9 @@
    - 勾 `https://login.microsoftonline.com/common/oauth2/nativeclient`
    - 同页 **Allow public client flows = Yes**（device code 必需）
 
-3. **Manifest**（左侧菜单）→ 把 `requiredResourceAccess` 数组替换为：
+3. **Manifest**（左侧菜单）→ `requiredResourceAccess` **只保留 Graph 块**
+   （Exchange Online 不声明——v2 端点支持动态 consent，授权请求带
+   scope 即可；若租户无 EXO service principal，声明反而保存报错）：
 
 ```json
 "requiredResourceAccess": [
@@ -29,13 +31,6 @@
       { "id": "7427e0e9-2fba-42fe-b0c0-848c9e6a8182", "type": "Scope" }
     ]
   },
-  {
-    "resourceAppId": "00000002-0000-0ff1-ce00-000000000000",
-    "resourceAccess": [
-      { "id": "652390e4-393a-48de-948d-67205b21a982", "type": "Scope" },
-      { "id": "258f6539-9087-4fdd-bfb9-ea5f61e48f31", "type": "Scope" }
-    ]
-  }
 ]
 ```
 
