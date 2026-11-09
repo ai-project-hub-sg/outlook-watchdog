@@ -439,6 +439,107 @@ func (d *DB) SetSetting(ctx context.Context, key, value string) error {
 	return err
 }
 
+// SetAccountEnabled 开关账号。
+func (d *DB) SetAccountEnabled(ctx context.Context, id int64, enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	_, err := d.ExecContext(ctx, `UPDATE accounts SET enabled=?, updated_at=? WHERE id=?`,
+		v, NowUTC(), id)
+	return err
+}
+
+// RunWithResults 是一次运行及其各检查项结果（账号详情页用）。
+type RunWithResults struct {
+	ID         int64         `json:"id"`
+	Source     string        `json:"source"`
+	StartedAt  string        `json:"started_at"`
+	FinishedAt string        `json:"finished_at"`
+	Status     string        `json:"status"`
+	Results    []CheckResult `json:"results"`
+}
+
+// ListRuns 返回账号最近 N 次运行（含各检查项结果）。
+func (d *DB) ListRuns(ctx context.Context, accountID int64, limit int) ([]*RunWithResults, error) {
+	rows, err := d.QueryContext(ctx,
+		`SELECT id, source, started_at, COALESCE(finished_at,''), COALESCE(status,'')
+		 FROM check_runs WHERE account_id=? ORDER BY id DESC LIMIT ?`, accountID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*RunWithResults
+	for rows.Next() {
+		r := &RunWithResults{}
+		if err := rows.Scan(&r.ID, &r.Source, &r.StartedAt, &r.FinishedAt, &r.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, r := range out {
+		rs, err := d.listResults(ctx, r.ID)
+		if err != nil {
+			return nil, err
+		}
+		r.Results = rs
+	}
+	return out, nil
+}
+
+func (d *DB) listResults(ctx context.Context, runPK int64) ([]CheckResult, error) {
+	rows, err := d.QueryContext(ctx,
+		`SELECT check_name, result, classification, detail, duration_ms
+		 FROM check_results WHERE run_id=? ORDER BY id`, runPK)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CheckResult
+	for rows.Next() {
+		var r CheckResult
+		if err := rows.Scan(&r.Check, &r.Result, &r.Classification, &r.Detail, &r.DurationMS); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CreateSession 写入会话（token 由调用方生成）。
+func (d *DB) CreateSession(ctx context.Context, token string, ttl time.Duration) error {
+	exp := time.Now().UTC().Add(ttl).Format(time.RFC3339)
+	_, err := d.ExecContext(ctx, `INSERT INTO sessions(token, expires_at) VALUES(?,?)`, token, exp)
+	return err
+}
+
+// GetSession 校验会话未过期；过期即删并返回 false。
+func (d *DB) GetSession(ctx context.Context, token string) (bool, error) {
+	var exp string
+	err := d.QueryRowContext(ctx, `SELECT expires_at FROM sessions WHERE token=?`, token).Scan(&exp)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	t, err := time.Parse(time.RFC3339, exp)
+	if err != nil || time.Now().UTC().After(t) {
+		_, _ = d.ExecContext(ctx, `DELETE FROM sessions WHERE token=?`, token)
+		return false, nil
+	}
+	return true, nil
+}
+
+// DeleteSession 注销会话。
+func (d *DB) DeleteSession(ctx context.Context, token string) error {
+	_, err := d.ExecContext(ctx, `DELETE FROM sessions WHERE token=?`, token)
+	return err
+}
+
 // NowUTC 返回 ISO8601 UTC 时间戳（与 SQLite 默认值同格式）。
 func NowUTC() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05Z")

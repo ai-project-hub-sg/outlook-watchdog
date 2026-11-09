@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"outlook-watchdog/internal/notify"
 	"outlook-watchdog/internal/sched"
 	"outlook-watchdog/internal/store"
+	"outlook-watchdog/internal/web"
 )
 
 var version = "dev"
@@ -26,7 +28,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `outlook-watchdog %s — 个人 Outlook/Hotmail 账号健康看门狗
 
 用法:
-  watchdog serve                        调度器 + WebUI 常驻（M4 实现）
+  watchdog serve                        调度器 + WebUI 常驻（监听 config.yaml listen）
   watchdog check --once [--account x]   跑一轮检查
   watchdog snapshot --account x         建立/重置 rules 基线
   watchdog status                       查看各账号当前状态
@@ -83,8 +85,7 @@ func main() {
 	case "migrate":
 		code = cmdMigrate(ctx, cfg, os.Args[2:])
 	case "serve":
-		fmt.Fprintln(os.Stderr, "serve 将在 M4 里程碑提供（调度器+WebUI）；当前请用 run")
-		code = 2
+		code = cmdServe(ctx, cfg, os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -200,6 +201,55 @@ func printOutcome(a *store.Account, out *check.Outcome) {
 	for _, r := range out.Results {
 		fmt.Printf("    %-9s %-12s %-18s %s\n", r.Check, r.Result, r.Classification, r.Detail)
 	}
+}
+
+// ---- serve ----
+
+func cmdServe(ctx context.Context, cfg *config.Config, args []string) int {
+	db, err := openStore(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "store:", err)
+		return 2
+	}
+	defer db.Close()
+
+	srv, err := web.New(db, version)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "web:", err)
+		return 2
+	}
+	sc := srv.Scheduler()
+	sc.OnRound = func(a *store.Account, status string, err error) {
+		ts := time.Now().Format("15:04:05")
+		if err != nil {
+			fmt.Printf("[%s] %v\n", ts, err)
+			return
+		}
+		if a == nil {
+			fmt.Printf("[%s] %s\n", ts, status)
+			return
+		}
+		fmt.Printf("[%s] %s => %s\n", ts, maskEmail(a.Email), status)
+	}
+	go sc.Loop(ctx)
+
+	httpSrv := &http.Server{
+		Addr:              cfg.Listen,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		shCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(shCtx)
+	}()
+	fmt.Printf("watchdog %s 监听 http://%s （公网访问请经 HTTPS 反代）\n", version, cfg.Listen)
+	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		fmt.Fprintln(os.Stderr, "http:", err)
+		return 2
+	}
+	return 0
 }
 
 // ---- snapshot ----

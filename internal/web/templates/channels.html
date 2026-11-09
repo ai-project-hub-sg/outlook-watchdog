@@ -1,0 +1,48 @@
+{{define "channels"}}<!doctype html><html lang="zh">
+{{template "head" .}}
+<body>
+{{template "nav" .}}
+<main>
+<h2>添加告警通道</h2>
+<form method="post" action="/channels/add" class="card">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<div class="grid3">
+<label>类型
+<select name="type" onchange="document.querySelectorAll('.cfg').forEach(e=>e.style.display=e.dataset.t===this.value?'':'none')">
+<option value="smtp">smtp</option><option value="webhook">webhook</option>
+</select></label>
+<label>名称 <input name="name" placeholder="alert163"></label>
+</div>
+<div class="cfg" data-t="smtp">
+<div class="grid3">
+<label>SMTP Host <input name="host" placeholder="smtp.163.com"></label>
+<label>端口 <input name="port" placeholder="465"></label>
+<label>发信账号 <input name="user" placeholder="x@163.com"></label>
+<label>授权码/密码 <input name="pass" type="password" autocomplete="off"></label>
+<label>收件人 <input name="to" placeholder="y@outlook.com"></label>
+</div></div>
+<div class="cfg" data-t="webhook" style="display:none">
+<div class="grid3">
+<label>Webhook URL <input name="url" placeholder="https://..."></label>
+<label>Token(可选) <input name="token" type="password" autocomplete="off"></label>
+</div></div>
+<button>添加</button>
+</form>
+
+<h2>通道列表</h2>
+<table>
+<tr><th>ID</th><th>类型</th><th>名称</th><th>启用</th><th></th></tr>
+{{range .Data.Channels}}
+<tr>
+<td class="dim">{{.ID}}</td><td>{{.Type}}</td><td>{{.Name}}</td><td>{{.Enabled}}</td>
+<td class="row">
+<form method="post" action="/channels/test" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="link">测试</button></form>
+<form method="post" action="/channels/delete" class="inline" onsubmit="return confirm('删除通道？')"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="link bad">删除</button></form>
+</td>
+</tr>
+{{else}}<tr><td colspan="5" class="dim">无通道</td></tr>
+{{end}}
+</table>
+<p class="dim">通道敏感字段（密码/token）不在页面展示。</p>
+</main>
+</body></html>{{end}}

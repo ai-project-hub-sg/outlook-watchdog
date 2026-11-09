@@ -1,0 +1,51 @@
+{{define "accounts"}}<!doctype html><html lang="zh">
+{{template "head" .}}
+<body>
+{{template "nav" .}}
+<main>
+<h2>添加账号</h2>
+<form method="post" action="/accounts/add" class="card">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<div class="grid3">
+<label>邮箱 <input name="email" type="email" required placeholder="x@outlook.com"></label>
+<label>Client ID <input name="client_id" required placeholder="app client id"></label>
+<label>Refresh Token <input name="refresh_token" type="password" required autocomplete="off"></label>
+</div>
+<div class="checks">
+<label><input type="checkbox" name="chk_c1_token" checked> c1_token</label>
+<label><input type="checkbox" name="chk_c2_me" checked> c2_me</label>
+<label><input type="checkbox" name="chk_c3_recv" checked> c3_recv</label>
+<label><input type="checkbox" name="chk_c5_rules" checked> c5_rules</label>
+</div>
+<button>添加</button>
+</form>
+
+<h2>账号列表</h2>
+<table>
+<tr><th>邮箱</th><th>状态</th><th>RT(掩码)</th><th>启用</th><th></th></tr>
+{{range .Data.Rows}}
+<tr>
+<td><a href="/account/{{.ID}}">{{mask .Email}}</a></td>
+<td><span class="badge {{badge .Status}}">{{.Status}}</span></td>
+<td class="dim mono">{{.RT}}</td>
+<td>
+<form method="post" action="/accounts/toggle" class="inline">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<input type="hidden" name="id" value="{{.ID}}">
+<input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}">
+<button class="link">{{if .Enabled}}停用{{else}}启用{{end}}</button>
+</form>
+</td>
+<td>
+<form method="post" action="/accounts/delete" class="inline" onsubmit="return confirm('确认删除该账号及其历史数据？')">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<input type="hidden" name="id" value="{{.ID}}">
+<button class="link bad">删除</button>
+</form>
+</td>
+</tr>
+{{else}}<tr><td colspan="5" class="dim">暂无账号</td></tr>
+{{end}}
+</table>
+</main>
+</body></html>{{end}}

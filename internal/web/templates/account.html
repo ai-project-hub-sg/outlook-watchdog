@@ -1,0 +1,42 @@
+{{define "account"}}<!doctype html><html lang="zh">
+{{template "head" .}}
+<body>
+{{template "nav" .}}
+<main>
+<h2>账号 {{mask .Data.A.Email}}</h2>
+<div class="cards">
+<div class="stat"><b class="badge {{badge .Data.State.Status}}">{{.Data.State.Status}}</b><span>当前状态</span></div>
+<div class="stat"><b>{{.Data.State.ConsecutiveFail}}</b><span>连续失败</span></div>
+<div class="stat"><b>{{.Data.State.LastCheckAt}}</b><span>上次检查(UTC)</span></div>
+<div class="stat"><b class="mono small">{{if .Data.BaselineSHA}}{{.Data.BaselineSHA}}{{else}}未建立{{end}}</b><span>规则基线 SHA</span></div>
+</div>
+
+<div class="row">
+<form method="post" action="/account/check"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{.Data.A.ID}}"><button>立即检查</button></form>
+<form method="post" action="/account/snapshot"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{.Data.A.ID}}"><button>重建规则基线</button></form>
+</div>
+
+<h3>检查项开关</h3>
+<form method="post" action="/accounts/checks" class="checks">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<input type="hidden" name="id" value="{{.Data.A.ID}}">
+{{range $c := .Data.Checks}}
+<label><input type="checkbox" name="chk_{{$c}}" {{if index $.Data.A.Checks $c}}checked{{end}}> {{$c}}</label>
+{{end}}
+<button>保存</button>
+</form>
+
+<h3>检查历史</h3>
+{{range .Data.Runs}}
+<details class="run">
+<summary><span class="dim">{{.StartedAt}}</span> <span class="badge {{badge .Status}}">{{.Status}}</span> <span class="dim">source={{.Source}}</span></summary>
+<table>
+<tr><th>检查项</th><th>结果</th><th>分类</th><th>详情</th><th>耗时</th></tr>
+{{range .Results}}
+<tr><td class="mono">{{.Check}}</td><td>{{.Result}}</td><td>{{.Classification}}</td><td>{{maskText .Detail}}</td><td class="dim">{{.DurationMS}}ms</td></tr>
+{{end}}
+</table>
+</details>
+{{else}}<p class="dim">无检查记录</p>{{end}}
+</main>
+</body></html>{{end}}

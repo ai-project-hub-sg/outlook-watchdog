@@ -1,0 +1,27 @@
+{{define "setup"}}<!doctype html><html lang="zh">
+{{template "head" .}}
+<body class="center">
+<main class="card">
+<h1>outlook-watchdog 初始化</h1>
+<p class="dim">首次使用，请设置管理员密码（≥10 位）。</p>
+{{if .Data.Err}}<div class="err">{{.Data.Err}}</div>{{end}}
+<form method="post">
+<label>管理员密码 <input type="password" name="password" required minlength="10"></label>
+<label>确认密码 <input type="password" name="password2" required minlength="10"></label>
+<button>设置并继续</button>
+</form>
+</main>
+</body></html>{{end}}
+
+{{define "login"}}<!doctype html><html lang="zh">
+{{template "head" .}}
+<body class="center">
+<main class="card">
+<h1>登录</h1>
+{{if .Data.Err}}<div class="err">{{.Data.Err}}</div>{{end}}
+<form method="post">
+<label>管理员密码 <input type="password" name="password" required autofocus></label>
+<button>登录</button>
+</form>
+</main>
+</body></html>{{end}}

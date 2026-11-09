@@ -1,0 +1,41 @@
+{{define "dashboard"}}<!doctype html><html lang="zh">
+{{template "head" .}}
+<body>
+{{template "nav" .}}
+<main>
+<div class="cards">
+<div class="stat"><b>{{.Data.Total}}</b><span>账号总数</span></div>
+<div class="stat ok"><b>{{.Data.OkCnt}}</b><span>健康</span></div>
+<div class="stat bad"><b>{{.Data.FailCnt}}</b><span>异常</span></div>
+<div class="stat dim"><b>{{.Data.DisCnt}}</b><span>停用</span></div>
+</div>
+
+<h2>账号状态</h2>
+<table>
+<tr><th>邮箱</th><th>状态</th><th>连败</th><th>上次检查(UTC)</th></tr>
+{{range .Data.Rows}}
+<tr>
+<td><a href="/account/{{.ID}}">{{mask .Email}}</a>{{if not .Enabled}} <span class="dim">(停用)</span>{{end}}</td>
+<td><span class="badge {{badge .Status}}">{{.Status}}</span></td>
+<td>{{.ConsecutiveFail}}</td>
+<td class="dim">{{.LastCheckAt}}</td>
+</tr>
+{{else}}<tr><td colspan="4" class="dim">暂无账号，先到「账号」页添加</td></tr>
+{{end}}
+</table>
+
+<h2>最近告警</h2>
+<table>
+<tr><th>时间(UTC)</th><th>迁移</th><th>通道</th><th>内容</th></tr>
+{{range .Data.Alerts}}
+<tr>
+<td class="dim">{{.SentAt}}</td>
+<td>{{.FromStatus}}→{{.ToStatus}}</td>
+<td>{{.Channel}}</td>
+<td>{{maskText .Reason}}{{if .Error}} <span class="err">({{.Error}})</span>{{end}}</td>
+</tr>
+{{else}}<tr><td colspan="4" class="dim">无告警</td></tr>
+{{end}}
+</table>
+</main>
+</body></html>{{end}}

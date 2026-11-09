@@ -1,0 +1,20 @@
+{{define "alerts"}}<!doctype html><html lang="zh">
+{{template "head" .}}
+<body>
+{{template "nav" .}}
+<main>
+<h2>告警历史</h2>
+<table>
+<tr><th>ID</th><th>时间(UTC)</th><th>迁移</th><th>通道</th><th>内容 / 错误</th></tr>
+{{range .Data.Alerts}}
+<tr>
+<td class="dim">{{.ID}}</td><td class="dim">{{.SentAt}}</td>
+<td>{{.FromStatus}}→{{.ToStatus}}</td><td>{{.Channel}}</td>
+<td>{{maskText .Reason}}{{if .Error}} <span class="err">({{.Error}})</span>{{end}}</td>
+</tr>
+{{else}}<tr><td colspan="5" class="dim">无告警</td></tr>
+{{end}}
+</table>
+<p class="dim">显示最近 100 条，可用 ?limit=N (≤1000) 调整。</p>
+</main>
+</body></html>{{end}}

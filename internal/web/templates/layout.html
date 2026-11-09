@@ -1,0 +1,19 @@
+{{define "head"}}<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.Title}} · outlook-watchdog</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/htmx.min.js" defer></script>
+</head>{{end}}
+
+{{define "nav"}}<nav class="nav">
+<a href="/" class="{{if eq .Path "/"}}on{{end}}">大盘</a>
+<a href="/accounts" class="{{if eq .Path "/accounts"}}on{{end}}">账号</a>
+<a href="/alerts" class="{{if eq .Path "/alerts"}}on{{end}}">告警</a>
+<a href="/channels" class="{{if eq .Path "/channels"}}on{{end}}">通道</a>
+<a href="/settings" class="{{if eq .Path "/settings"}}on{{end}}">设置</a>
+<span class="grow"></span>
+<span class="dim">v{{.Version}}</span>
+<a href="/logout">退出</a>
+</nav>
+{{if .Flash}}<div class="flash">{{.Flash}}</div>{{end}}{{end}}
