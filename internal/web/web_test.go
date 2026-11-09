@@ -84,6 +84,22 @@ func TestAuthRequired(t *testing.T) {
 	if rec.Code != 303 || rec.Header().Get("Location") != "/setup" {
 		t.Fatalf("期望跳 /setup，得到 %d %s", rec.Code, rec.Header().Get("Location"))
 	}
+	// setup/login 页本身必须可渲染（无 Data 注入时不得渲染失败）。
+	// 未设管理员：/setup=200 渲染，/login→/setup；设管理员后：/login=200，/setup→/。
+	check := func(path string, want int) {
+		req = httptest.NewRequest("GET", path, nil)
+		rec = httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != want || (want == 200 && strings.Contains(rec.Body.String(), "渲染失败")) {
+			t.Fatalf("%s 渲染异常: code=%d want=%d", path, rec.Code, want)
+		}
+	}
+	check("/setup", 200)
+	check("/login", 303)
+	h, _ := bcrypt.GenerateFromPassword([]byte("x-1234567890"), bcrypt.MinCost)
+	_ = s.db.SetSetting(context.Background(), "admin.password_hash", string(h))
+	check("/login", 200)
+	check("/setup", 303)
 }
 
 // TestCSRFFails：缺少 CSRF token 的写请求必须 403。

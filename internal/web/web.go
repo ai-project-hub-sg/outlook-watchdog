@@ -200,6 +200,9 @@ type pageData struct {
 }
 
 func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, data any) {
+	if data == nil {
+		data = map[string]any{}
+	}
 	pd := pageData{Title: name, CSRF: s.csrfOf(r), Path: r.URL.Path, Data: data, Version: s.version}
 	if f := r.URL.Query().Get("flash"); f != "" {
 		pd.Flash = f
