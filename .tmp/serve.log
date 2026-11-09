@@ -1,5 +1,0 @@
-watchdog dev 监听 http://127.0.0.1:8080 （公网访问请经 HTTPS 反代）
-[23:59:56] scheduler start: interval=1h0m0s phased-per-account threshold=1
-[23:59:57] y***w@outlook.com => ok
-[23:59:59] s***6@outlook.com => ok
-[00:00:00] f***6@outlook.com => ok
