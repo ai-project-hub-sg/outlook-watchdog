@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"hash/fnv"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -90,8 +91,17 @@ func (r *Runner) RunAccount(ctx context.Context, a *store.Account, trigger strin
 		_ = r.Store.AddResult(ctx, runPK, &cr)
 	}
 
-	// ---- C4: 发信能力（默认关；真实发信到自己） ----
-	if a.Checks["c4_send"] {
+	// 核心四件套健康度：任一非 pass 视为异常，真发信检查升到 ~3 次/天
+	coreOK := true
+	for _, cr := range out.Results {
+		if coreCheckNames[cr.Check] && cr.Result != "pass" {
+			coreOK = false
+			break
+		}
+	}
+
+	// ---- C4: 发信能力（默认关；真实发信到自己；自适应限频） ----
+	if a.Checks["c4_send"] && r.dueRealMail(ctx, a, "c4_send", coreOK) {
 		cr := r.checkSend(ctx, a, gc)
 		out.Results = append(out.Results, cr)
 		_ = r.Store.AddResult(ctx, runPK, &cr)
@@ -109,19 +119,48 @@ func (r *Runner) RunAccount(ctx context.Context, a *store.Account, trigger strin
 		_ = r.Store.AddResult(ctx, runPK, &cr)
 	}
 
-	// ---- C8: roundtrip（默认关；≥30min 限频，未到跳过） ----
-	if a.Checks["c8_roundtrip"] {
-		if last, _ := r.Store.LastCheckTime(ctx, a.ID, "c8_roundtrip"); last != "" {
-			if t, err := time.Parse("2006-01-02T15:04:05Z", last); err == nil && time.Since(t) < 30*time.Minute {
-				return out, nil
-			}
-		}
+	// ---- C8: roundtrip（默认关；自适应限频，未到跳过） ----
+	if a.Checks["c8_roundtrip"] && r.dueRealMail(ctx, a, "c8_roundtrip", coreOK) {
 		cr := r.checkRoundtrip(ctx, a, gc)
 		out.Results = append(out.Results, cr)
 		_ = r.Store.AddResult(ctx, runPK, &cr)
 	}
 
 	return out, nil
+}
+
+// coreCheckNames 核心四件套：token/me/收件/规则审计。
+var coreCheckNames = map[string]bool{
+	"c1_token": true, "c2_me": true, "c3_recv": true, "c5_rules": true, "rules": true,
+}
+
+// StableOffset 由 key 生成确定性偏移（FNV-1a），用于每账号错峰。
+func StableOffset(key string, mod time.Duration) time.Duration {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(key))
+	return time.Duration(h.Sum64() % uint64(mod))
+}
+
+// realMailGap 真实发信类检查（c4/c8）的最小间隔：核心健康→约 1 次/天；
+// 核心异常→约 3 次/天便于排查。账号级稳定抖动使各账号节奏错开。
+func realMailGap(a *store.Account, coreOK bool) time.Duration {
+	if coreOK {
+		return 24*time.Hour - StableOffset(a.Email+"|r24", 2*time.Hour)
+	}
+	return 8*time.Hour - StableOffset(a.Email+"|r8", time.Hour)
+}
+
+// dueRealMail 判断真实发信检查是否到点（未到点则本轮跳过，不影响其他检查）。
+func (r *Runner) dueRealMail(ctx context.Context, a *store.Account, checkName string, coreOK bool) bool {
+	last, _ := r.Store.LastCheckTime(ctx, a.ID, checkName)
+	if last == "" {
+		return true
+	}
+	t, err := time.Parse("2006-01-02T15:04:05Z", last)
+	if err != nil {
+		return true
+	}
+	return time.Since(t) >= realMailGap(a, coreOK)
 }
 
 // checkSend 用 Graph sendMail 给自己发一封，仅验证发信能力。

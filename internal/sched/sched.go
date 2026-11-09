@@ -4,7 +4,6 @@ package sched
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"sync"
 	"time"
@@ -16,7 +15,7 @@ import (
 
 // Defaults 调度参数默认值（settings 表可覆盖）。
 const (
-	DefaultIntervalMin   = 15
+	DefaultIntervalMin   = 60
 	DefaultJitter        = 0.2
 	DefaultFailThreshold = 2
 )
@@ -30,6 +29,7 @@ type Scheduler struct {
 	mu        sync.Mutex
 	lastRound time.Time // 上次轮次完成时间（零值=未跑过）
 	nextRound time.Time // 下轮计划时间（零值=Loop 未启动）
+	lastSlot  map[int64]time.Time // 每账号上次运行的周期槽起点（防同槽重跑）
 }
 
 // RoundInfo 返回调度器运行态（WebUI 状态页用）。
@@ -87,43 +87,77 @@ func (s *Scheduler) RunOnce(ctx context.Context, source string, threshold int, o
 		return outs
 	}
 	for _, a := range accounts {
-		prev, _ := s.DB.GetState(ctx, a.ID)
-		prevStatus := "unknown"
-		if prev != nil {
-			prevStatus = prev.Status
-		}
-		r := s.NewRunner()
-		out, err := r.RunAccount(ctx, a, source)
-		if err != nil {
-			out = &check.Outcome{AccountID: a.ID, Status: "unknown", Err: err}
-			s.report(a, "", fmt.Errorf("run: %w", err))
-		} else {
-			s.report(a, out.Status, nil)
-		}
-		reason := summarizeReason(out)
-		if derr := notify.Dispatch(ctx, s.DB, a, prevStatus, out.Status, reason, threshold); derr != nil {
-			s.report(a, out.Status, fmt.Errorf("alert dispatch: %w", derr))
-		}
-		outs = append(outs, out)
+		outs = append(outs, s.runOne(ctx, a, source, threshold))
 	}
 	return outs
 }
 
-// Loop 常驻循环：每轮间隔 interval ± jitter；ctx 取消即退。
+func (s *Scheduler) runOne(ctx context.Context, a *store.Account, source string, threshold int) *check.Outcome {
+	prev, _ := s.DB.GetState(ctx, a.ID)
+	prevStatus := "unknown"
+	if prev != nil {
+		prevStatus = prev.Status
+	}
+	r := s.NewRunner()
+	out, err := r.RunAccount(ctx, a, source)
+	if err != nil {
+		out = &check.Outcome{AccountID: a.ID, Status: "unknown", Err: err}
+		s.report(a, "", fmt.Errorf("run: %w", err))
+	} else {
+		s.report(a, out.Status, nil)
+	}
+	reason := summarizeReason(out)
+	if derr := notify.Dispatch(ctx, s.DB, a, prevStatus, out.Status, reason, threshold); derr != nil {
+		s.report(a, out.Status, fmt.Errorf("alert dispatch: %w", derr))
+	}
+	return out
+}
+
+// Loop 常驻循环：每账号按稳定相位错峰运行——周期为 interval，
+// 账号 i 在槽起点 + phase_i + 微扰处运行（phase 由邮箱哈希决定，重启不漂移）。
 func (s *Scheduler) Loop(ctx context.Context) {
-	intervalMin, jitter, threshold := s.Params(ctx)
+	intervalMin, _, threshold := s.Params(ctx)
 	base := time.Duration(intervalMin) * time.Minute
-	s.report(nil, "", fmt.Errorf("scheduler start: interval=%v jitter=%.2f threshold=%d", base, jitter, threshold))
+	if s.lastSlot == nil {
+		s.lastSlot = map[int64]time.Time{}
+	}
+	s.report(nil, "", fmt.Errorf("scheduler start: interval=%v phased-per-account threshold=%d", base, threshold))
+	tick := time.NewTicker(time.Minute)
+	defer tick.Stop()
 	for {
-		s.RunOnce(ctx, "sched", threshold, 0)
-		wait := base + time.Duration((rand.Float64()*2-1)*jitter*float64(base))
-		s.setRound(time.Now(), time.Now().Add(wait))
+		s.runDue(ctx, base, threshold)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(wait):
+		case <-tick.C:
 		}
 	}
+}
+
+// runDue 扫描到期账号并运行；到期时间 = 槽起点 + 账号相位 + 确定性微扰。
+func (s *Scheduler) runDue(ctx context.Context, base time.Duration, threshold int) {
+	accounts, err := s.DB.ListAccounts(ctx, true)
+	if err != nil {
+		s.report(nil, "", fmt.Errorf("list accounts: %w", err))
+		return
+	}
+	now := time.Now()
+	slot := now.Truncate(base)
+	var nextDue time.Time
+	for _, a := range accounts {
+		phase := check.StableOffset(a.Email, base*85/100)
+		micro := check.StableOffset(a.Email+"|micro|"+slot.Format("06010215"), 3*time.Minute)
+		due := slot.Add(phase).Add(micro)
+		if !now.Before(due) && s.lastSlot[a.ID] != slot {
+			s.lastSlot[a.ID] = slot
+			s.runOne(ctx, a, "sched", threshold)
+			s.setRound(now, time.Time{})
+		}
+		if next := slot.Add(base).Add(phase).Add(micro); nextDue.IsZero() || next.Before(nextDue) {
+			nextDue = next
+		}
+	}
+	s.setRound(time.Time{}, nextDue)
 }
 
 func (s *Scheduler) report(a *store.Account, status string, err error) {
