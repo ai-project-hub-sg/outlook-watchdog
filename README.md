@@ -41,8 +41,21 @@ go build -o bin/watchdog.exe ./cmd/watchdog   # 或取 dist/ 预编译包
    → 「测试」验证路由
 
 授权范围：「标准」= Graph 四项（核心检查够用）；「完整」附加
-IMAP/SMTP 协议 scope（自建 Entra app 才支持，见 docs/register-app.md）。
-默认 client_id 为 Microsoft Graph PowerShell 公共应用，可在设置页覆盖。
+IMAP/SMTP 协议 scope（自建 Entra app 才支持，见 docs/register-app.md）；
+任意档位可勾「附加规则管理权限」（MailboxSettings.ReadWrite）启用规则
+增删改查。默认 client_id 为 Microsoft Graph PowerShell 公共应用，
+可在设置页覆盖。
+
+## 规则管理
+
+账号详情页 →「规则管理」：对收件规则做增删改查（需规则管理档授权）——
+列出实时规则、启停、编辑（名称/条件/动作/序列/停止后续）、删除。
+典型用途：批量给多个邮箱配转发而不用逐个登 Outlook。
+
+- 每次写操作落 `rule_ops` 审计表（操作/规则名/动作摘要/时间）
+- 写成功后 **c5 基线自动重建**——本工具的修改不触发可疑规则误报
+- 表单支持：forwardTo/附件转发/重定向/删除/标记已读 + 发件人/主题条件；
+  Outlook 端建的复杂规则可启停/删除，编辑保存会以表单字段重写
 
 ## 命令行
 

@@ -117,6 +117,31 @@ func TestCSRFFails(t *testing.T) {
 	}
 }
 
+// TestRuleOpsGuards：规则写接口未登录跳登录、缺 CSRF 拒绝（不触网）。
+func TestRuleOpsGuards(t *testing.T) {
+	s, db := newTestServer(t)
+	cookie := loginSession(t, s, db)
+
+	req := httptest.NewRequest("GET", "/account/rules?id=1", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 303 {
+		t.Fatalf("未登录应跳登录，得到 %d", rec.Code)
+	}
+
+	for _, path := range []string{"/account/rule/save", "/account/rule/toggle", "/account/rule/delete"} {
+		form := url.Values{"id": {"1"}, "rule_id": {"r1"}}
+		req = httptest.NewRequest("POST", path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		rec = httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code == 200 {
+			t.Fatalf("%s 缺 CSRF 不应成功", path)
+		}
+	}
+}
+
 func TestMaskEmailsInText(t *testing.T) {
 	got := maskEmailsInText("fwd=attacker@evil.com; 通知 admin@corp.io")
 	if strings.Contains(got, "attacker@") || strings.Contains(got, "admin@") {

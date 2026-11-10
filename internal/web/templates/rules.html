@@ -1,0 +1,97 @@
+{{define "rules"}}<!doctype html><html lang="zh">
+{{template "head" .}}
+<body>
+{{template "nav" .}}
+<main>
+<h2>规则管理 · {{mask .Data.A.Email}}</h2>
+<p><a href="/account/{{.Data.A.ID}}">← 返回账号详情</a></p>
+
+{{if .Data.ListErr}}<div class="flash err">读取规则失败：{{maskText .Data.ListErr}}</div>{{end}}
+{{if not .Data.CanWrite}}<div class="flash">当前凭据<b>无规则写权限</b>（MailboxSettings.ReadWrite）——可浏览但无法保存。
+请到账号详情页「重新授权」并在授权时勾选「附加规则管理权限」。</div>{{end}}
+
+<h3>现有规则（实时读取，共 {{len .Data.Rules}} 条）</h3>
+<table>
+<tr><th>名称</th><th>启用</th><th>序列</th><th>条件</th><th>动作</th><th>停止后续</th><th></th></tr>
+{{range $i, $r := .Data.Rules}}
+<tr>
+<td>{{$r.Name}}{{if $r.Other}} <span class="dim" title="含表单不支持的字段，编辑保存会以表单值重写">*</span>{{end}}</td>
+<td>{{$r.Enabled}}</td><td class="dim">{{$r.Seq}}</td>
+<td class="dim">{{if $r.CondType}}{{$r.CondType}}: {{maskText $r.CondVal}}{{else}}全部邮件{{end}}</td>
+<td class="dim">{{if eq $r.ActType "forward"}}fwd→{{maskText $r.Target}}{{else if eq $r.ActType "attach"}}附件fwd→{{maskText $r.Target}}{{else if eq $r.ActType "redirect"}}重定向→{{maskText $r.Target}}{{else if eq $r.ActType "delete"}}[删除邮件]{{else}}{{$r.ActType}}{{end}}</td>
+<td>{{$r.StopProc}}</td>
+<td class="row">
+{{if $.Data.CanWrite}}
+<button class="link" type="button" onclick="editRule({{$i}})">编辑</button>
+<form method="post" action="/account/rule/toggle" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$.Data.A.ID}}"><input type="hidden" name="rule_id" value="{{$r.ID}}"><input type="hidden" name="rule_name" value="{{$r.Name}}"><input type="hidden" name="enabled" value="{{$r.Enabled}}"><button class="link">{{if $r.Enabled}}停用{{else}}启用{{end}}</button></form>
+<form method="post" action="/account/rule/delete" class="inline" onsubmit="return confirm('删除规则「{{$r.Name}}」？删除后基线会自动重建。')"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$.Data.A.ID}}"><input type="hidden" name="rule_id" value="{{$r.ID}}"><input type="hidden" name="rule_name" value="{{$r.Name}}"><button class="link bad">删除</button></form>
+{{end}}
+</td>
+</tr>
+{{else}}<tr><td colspan="7" class="dim">无规则</td></tr>
+{{end}}
+</table>
+
+{{if .Data.CanWrite}}
+<h3 id="formTitle">新建规则</h3>
+<form method="post" action="/account/rule/save" class="card">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<input type="hidden" name="id" value="{{.Data.A.ID}}">
+<input type="hidden" name="rule_id" id="f_rid" value="">
+<div class="grid3">
+<label>名称 <input name="name" id="f_name" required></label>
+<label>启用 <input type="checkbox" name="enabled" id="f_enabled" checked></label>
+<label>序列(执行顺序) <input name="sequence" id="f_seq" type="number" value="1" min="1"></label>
+<label>条件
+ <select name="cond_type" id="f_ctype">
+  <option value="">全部邮件</option>
+  <option value="senderContains">发件人地址包含</option>
+  <option value="subjectContains">主题包含</option>
+ </select></label>
+<label>条件值 <input name="cond_val" id="f_cval" placeholder="留空=全部"></label>
+<label>动作
+ <select name="act_type" id="f_atype">
+  <option value="forward">转发副本(forwardTo)</option>
+  <option value="attach">附件转发(forwardAsAttachmentTo)</option>
+  <option value="redirect">重定向(redirectTo)</option>
+  <option value="delete">删除邮件</option>
+  <option value="markread">标记已读</option>
+ </select></label>
+<label>目标邮箱(逗号分隔) <input name="target" id="f_target" placeholder="x@a.com,y@b.com"></label>
+<label>停止后续规则 <input type="checkbox" name="stop" id="f_stop"></label>
+</div>
+<button>保存</button>
+<button type="button" class="link" onclick="resetForm()">清空/新建</button>
+<p class="dim">保存即写入该邮箱的真实收件规则，成功后 c5 基线自动重建（不会误报）。
+动作仅覆盖本表单字段；Outlook 端建的复杂规则（带 * 标记）被编辑保存时，
+表单未覆盖的条件/动作字段会被重写。</p>
+</form>
+{{end}}
+
+<h3>操作审计（近 30 条）</h3>
+<table>
+<tr><th>时间(UTC)</th><th>操作</th><th>规则</th><th>详情</th></tr>
+{{range .Data.Ops}}
+<tr><td class="dim mono">{{.CreatedAt}}</td><td>{{.Op}}</td><td>{{.RuleName}}</td><td class="dim">{{.Detail}}</td></tr>
+{{else}}<tr><td colspan="4" class="dim">暂无写操作</td></tr>
+{{end}}
+</table>
+</main>
+<script>
+var rules = {{.Data.RuleJSON}};
+function editRule(i){
+ var r=rules[i];document.getElementById('formTitle').textContent='编辑规则: '+r.Name;
+ document.getElementById('f_rid').value=r.ID;document.getElementById('f_name').value=r.Name;
+ document.getElementById('f_enabled').checked=r.Enabled;document.getElementById('f_seq').value=r.Seq;
+ document.getElementById('f_ctype').value=r.CondType;document.getElementById('f_cval').value=r.CondVal;
+ document.getElementById('f_atype').value=(r.ActType==='other'?'forward':r.ActType);
+ document.getElementById('f_target').value=r.Target;document.getElementById('f_stop').checked=r.StopProc;
+ window.scrollTo(0,document.getElementById('formTitle').offsetTop-60);
+}
+function resetForm(){
+ document.getElementById('formTitle').textContent='新建规则';
+ document.getElementById('f_rid').value='';document.getElementById('f_name').value='';
+ document.getElementById('f_cval').value='';document.getElementById('f_target').value='';
+}
+</script>
+</body></html>{{end}}

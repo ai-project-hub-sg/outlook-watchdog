@@ -15,6 +15,7 @@
 <div class="row">
 <form method="post" action="/account/check"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{.Data.A.ID}}"><button>立即检查</button></form>
 <form method="post" action="/account/snapshot"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{.Data.A.ID}}"><button>重建规则基线</button></form>
+<a href="/account/rules?id={{.Data.A.ID}}"><button type="button">规则管理</button></a>
 </div>
 
 <h3>重新授权（升级 scope / 更换凭据，保留历史与基线）</h3>
@@ -24,6 +25,7 @@
 <option value="full" selected>完整（Graph + IMAP/SMTP 协议探测）</option>
 <option value="graph">标准（仅 Graph 检查）</option>
 </select></label>
+<label class="dim"><input type="checkbox" id="ra_manage"> 附加规则管理权限（增删改收件规则）</label>
 <button type="button" onclick="raStart()">发起重新授权</button>
 <div id="ra_step" style="display:none;margin-top:10px">
 <p>打开 <a id="ra_url" target="_blank" rel="noopener"></a> 输入代码 <b id="ra_code" class="mono"></b></p>
@@ -37,7 +39,8 @@
 let raID=null;
 async function raStart(){
  const r=await fetch('/token/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
-  body:'csrf='+encodeURIComponent('{{.CSRF}}')+'&account_id={{.Data.A.ID}}&scope='+encodeURIComponent(document.getElementById('ra_scope').value)});
+  body:'csrf='+encodeURIComponent('{{.CSRF}}')+'&account_id={{.Data.A.ID}}&scope='+encodeURIComponent(document.getElementById('ra_scope').value)
+   +(document.getElementById('ra_manage').checked?'&manage=1':'')});
  const j=await r.json();
  document.getElementById('ra_step').style.display='block';
  if(j.err){document.getElementById('ra_status').textContent='失败: '+j.err;return}

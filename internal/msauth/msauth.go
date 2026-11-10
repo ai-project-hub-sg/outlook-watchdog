@@ -28,6 +28,10 @@ const ProtocolScope = "https://outlook.office.com/IMAP.AccessAsUser.All https://
 // RT 记录全部同意范围，检查时按子集兑换不同资源的 access token。
 const FullScope = GraphScope + " " + ProtocolScope
 
+// RuleWriteScope 规则管理（增删改查 messageRules）追加的写权限 scope；
+// 作为可选附加项叠加在 GraphScope/FullScope 之上，不强迫只读监控用户。
+const RuleWriteScope = "https://graph.microsoft.com/MailboxSettings.ReadWrite"
+
 // Client 是可注入 http.Client 的 grant 客户端。
 type Client struct {
 	HTTP      *http.Client

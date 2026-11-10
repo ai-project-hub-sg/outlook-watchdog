@@ -12,6 +12,7 @@
 <option value="full" selected>完整（Graph + IMAP/SMTP 协议探测）</option>
 <option value="graph">标准（仅 Graph 检查）</option>
 </select></label>
+<label class="dim"><input type="checkbox" id="tk_manage"> 附加规则管理权限（增删改收件规则）</label>
 </div>
 <button type="button" onclick="tkStart()">发起授权</button>
 <div id="tk_step" style="display:none;margin-top:12px">
@@ -59,7 +60,8 @@
 let tkID=null,tkTimer=null;
 async function tkStart(){
  const r=await fetch('/token/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
-  body:'csrf='+encodeURIComponent('{{.CSRF}}')+'&client_id='+encodeURIComponent(document.getElementById('tk_client').value)+'&scope='+encodeURIComponent(document.getElementById('tk_scope').value)});
+  body:'csrf='+encodeURIComponent('{{.CSRF}}')+'&client_id='+encodeURIComponent(document.getElementById('tk_client').value)+'&scope='+encodeURIComponent(document.getElementById('tk_scope').value)
+  +(document.getElementById('tk_manage').checked?'&manage=1':'')});
  const j=await r.json();
  if(j.err){document.getElementById('tk_status')&&(document.getElementById('tk_step').style.display='block',document.getElementById('tk_status').textContent='失败: '+j.err);return}
  tkID=j.id;

@@ -12,7 +12,9 @@ import (
 
 // MessageRule 是 Graph messageRules 响应中一条规则的最小模型。
 type MessageRule struct {
+	ID          string          `json:"id"` // 写操作（PATCH/DELETE）需要
 	DisplayName string          `json:"displayName"`
+	Sequence    int             `json:"sequence"`
 	IsEnabled   bool            `json:"isEnabled"`
 	Conditions  json.RawMessage `json:"conditions"`
 	Actions     struct {
@@ -30,6 +32,11 @@ type mailRef struct {
 		Address string `json:"address"`
 	} `json:"emailAddress"`
 }
+
+// FwdAddrs / FwdAttachAddrs / RedirectAddrs 返回各转发动作的目标地址列表。
+func (r *MessageRule) FwdAddrs() []string       { return addrSet(r.Actions.ForwardTo) }
+func (r *MessageRule) FwdAttachAddrs() []string { return addrSet(r.Actions.ForwardAsAttachmentTo) }
+func (r *MessageRule) RedirectAddrs() []string  { return addrSet(r.Actions.RedirectTo) }
 
 // NormRule 是用于基线比较的规范化规则。
 type NormRule struct {

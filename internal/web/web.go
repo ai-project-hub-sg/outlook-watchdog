@@ -113,6 +113,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/account/", s.requireAuth(s.pageAccountDetail))
 	s.mux.HandleFunc("/account/check", s.requireAuth(s.handleCheckNow))
 	s.mux.HandleFunc("/account/snapshot", s.requireAuth(s.handleSnapshot))
+	s.mux.HandleFunc("/account/rules", s.requireAuth(s.pageRules))
+	s.mux.HandleFunc("/account/rule/save", s.requireAuth(s.handleRuleSave))
+	s.mux.HandleFunc("/account/rule/toggle", s.requireAuth(s.handleRuleToggle))
+	s.mux.HandleFunc("/account/rule/delete", s.requireAuth(s.handleRuleDelete))
 	s.mux.HandleFunc("/alerts", s.requireAuth(s.pageAlerts))
 	s.mux.HandleFunc("/settings", s.requireAuth(s.pageSettings))
 	s.mux.HandleFunc("/settings/save", s.requireAuth(s.handleSaveSettings))
@@ -532,6 +536,278 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/account/"+strconv.FormatInt(id, 10)+"?flash="+urlq(msg), 303)
 }
 
+// ---- 规则管理（messageRules CRUD） ----
+
+// ruleView 页面展示/编辑用的规则视图（从 classify.MessageRule 解析）。
+type ruleView struct {
+	ID       string
+	Name     string
+	Seq      int
+	Enabled  bool
+	CondType string // ""=全部 / senderContains / subjectContains
+	CondVal  string
+	ActType  string // forward / attach / redirect / delete / markread / other
+	Target   string // 转发目标（逗号分隔，管理页编辑需要明文——管理员本人数据）
+	StopProc bool
+	Other    bool // 含本表单不支持的条件/动作字段（编辑会重写为表单值）
+}
+
+// parseRuleView 把 Graph 规则解析为表单可编辑的视图。
+func parseRuleView(m classify.MessageRule) ruleView {
+	v := ruleView{ID: m.ID, Name: m.DisplayName, Seq: m.Sequence, Enabled: m.IsEnabled}
+	var cond map[string]json.RawMessage
+	if json.Unmarshal(m.Conditions, &cond) == nil {
+		if arr, ok := strArr(cond["senderContains"]); ok && len(arr) > 0 {
+			v.CondType, v.CondVal = "senderContains", arr[0]
+		} else if arr, ok := strArr(cond["subjectContains"]); ok && len(arr) > 0 {
+			v.CondType, v.CondVal = "subjectContains", arr[0]
+		}
+		delete(cond, "senderContains")
+		delete(cond, "subjectContains")
+		for k, raw := range cond {
+			if string(raw) != "null" && string(raw) != "[]" && string(raw) != "false" {
+				_ = k
+				v.Other = true
+			}
+		}
+	}
+	switch {
+	case len(m.Actions.ForwardTo) > 0:
+		v.ActType = "forward"
+		v.Target = strings.Join(m.FwdAddrs(), ",")
+	case len(m.Actions.ForwardAsAttachmentTo) > 0:
+		v.ActType = "attach"
+		v.Target = strings.Join(m.FwdAttachAddrs(), ",")
+	case len(m.Actions.RedirectTo) > 0:
+		v.ActType = "redirect"
+		v.Target = strings.Join(m.RedirectAddrs(), ",")
+	case m.Actions.Delete:
+		v.ActType = "delete"
+	default:
+		v.ActType = "other"
+		if m.Actions.MoveToFolder != "" {
+			v.Other = true
+		}
+	}
+	v.StopProc = m.Actions.StopProcessingRules
+	return v
+}
+
+func strArr(raw json.RawMessage) ([]string, bool) {
+	var arr []string
+	if json.Unmarshal(raw, &arr) == nil {
+		return arr, true
+	}
+	return nil, false
+}
+
+// ruleGraphClient 取账号 Graph client；extraScope 非空时叠加（写操作需
+// MailboxSettings.ReadWrite，RT 未同意则 grant 失败 → 提示重新授权）。
+func (s *Server) ruleGraphClient(r *http.Request, accountID int64, extraScope string) (*store.Account, *graph.Client, error) {
+	a, err := s.db.GetAccount(r.Context(), strconv.FormatInt(accountID, 10))
+	if err != nil {
+		return nil, nil, err
+	}
+	scope := msauth.GraphScope
+	if extraScope != "" {
+		scope += " " + extraScope
+	}
+	g, err := msauth.New().RefreshTokenGrant(r.Context(), a.ClientID, a.RefreshToken, scope)
+	if err != nil {
+		return a, nil, err
+	}
+	if !g.OK {
+		return a, nil, fmt.Errorf("token grant: %s", g.Detail)
+	}
+	if g.NewRefreshToken != "" {
+		_ = s.db.UpdateRefreshToken(r.Context(), a.ID, g.NewRefreshToken)
+		a.RefreshToken = g.NewRefreshToken
+	}
+	return a, graph.New(g.AccessToken), nil
+}
+
+func (s *Server) pageRules(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	// 先试管理 scope 兑换：成功→可写；失败→降级 GraphScope 只读展示
+	a, gc, err := s.ruleGraphClient(r, id, msauth.RuleWriteScope)
+	canWrite := err == nil
+	if err != nil {
+		if a, gc, err = s.ruleGraphClient(r, id, ""); err != nil {
+			http.Redirect(w, r, "/accounts?flash="+urlq("取 token 失败: "+err.Error()), 303)
+			return
+		}
+	}
+	raw, status, err := gc.MessageRules(r.Context())
+	var views []ruleView
+	var listErr string
+	switch {
+	case err != nil:
+		listErr = "请求失败: " + err.Error()
+	case status != 200:
+		listErr = fmt.Sprintf("Graph %d", status)
+	default:
+		for _, m := range raw {
+			views = append(views, parseRuleView(m))
+		}
+	}
+	ops, _ := s.db.ListRuleOps(r.Context(), a.ID, 30)
+	ruleJSON, _ := json.Marshal(views)
+	s.render(w, r, "rules", map[string]any{
+		"A": a, "Rules": views, "CanWrite": canWrite, "ListErr": listErr,
+		"Ops": ops, "RuleJSON": template.JS(ruleJSON),
+	})
+}
+
+// rulePayload 把表单字段组装成 Graph messageRule 结构。
+func rulePayload(r *http.Request) (map[string]any, string, error) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		return nil, "", fmt.Errorf("规则名必填")
+	}
+	seq, _ := strconv.Atoi(r.FormValue("sequence"))
+	if seq <= 0 {
+		seq = 1
+	}
+	p := map[string]any{
+		"displayName": name,
+		"isEnabled":   r.FormValue("enabled") == "on",
+		"sequence":    seq,
+	}
+	condType, condVal := r.FormValue("cond_type"), strings.TrimSpace(r.FormValue("cond_val"))
+	if condType != "" && condVal != "" {
+		p["conditions"] = map[string]any{condType: []string{condVal}}
+	}
+	mailObjs := func(csv string) []map[string]any {
+		var out []map[string]any
+		for _, m := range strings.Split(csv, ",") {
+			if m = strings.TrimSpace(m); m != "" {
+				out = append(out, map[string]any{"emailAddress": map[string]string{"address": m}})
+			}
+		}
+		return out
+	}
+	act := map[string]any{"stopProcessingRules": r.FormValue("stop") == "on"}
+	target := r.FormValue("target")
+	switch r.FormValue("act_type") {
+	case "forward":
+		act["forwardTo"] = mailObjs(target)
+	case "attach":
+		act["forwardAsAttachmentTo"] = mailObjs(target)
+	case "redirect":
+		act["redirectTo"] = mailObjs(target)
+	case "delete":
+		act["delete"] = true
+	case "markread":
+		act["markAsRead"] = true
+	}
+	p["actions"] = act
+	summary := fmt.Sprintf("%s 条件[%s=%s] 动作[%s→%s]%s", name, condType, condVal,
+		r.FormValue("act_type"), maskEmailsInText(target), map[bool]string{true: " +停止后续"}[r.FormValue("stop") == "on"])
+	return p, summary, nil
+}
+
+// afterRuleWrite 写成功后：审计 + 自动重建基线（本工具的修改=用户本意，
+// 不让哨兵对自己人告警）+ 回跳。
+func (s *Server) afterRuleWrite(w http.ResponseWriter, r *http.Request, a *store.Account, op, ruleID, ruleName, detail string) {
+	_ = s.db.AddRuleOp(r.Context(), a.ID, op, ruleID, ruleName, detail)
+	sha, berr := check.NewRunner(s.db).SnapshotBaseline(r.Context(), a)
+	msg := "操作完成：" + detail
+	if berr == nil {
+		msg += "（基线已自动重建 sha=" + sha[:12] + "）"
+	} else {
+		msg += "（⚠ 基线重建失败: " + berr.Error() + "）"
+	}
+	http.Redirect(w, r, "/account/rules?id="+strconv.FormatInt(a.ID, 10)+"&flash="+urlq(msg), 303)
+}
+
+func (s *Server) handleRuleSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || !s.csrfCheck(r) {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	id, _ := strconv.ParseInt(r.FormValue("id"), 10, 64)
+	a, gc, err := s.ruleGraphClient(r, id, msauth.RuleWriteScope)
+	if err != nil {
+		http.Redirect(w, r, "/account/rules?id="+strconv.FormatInt(id, 10)+"&flash="+urlq(
+			"缺少规则写权限（MailboxSettings.ReadWrite）——请重新授权并勾选「规则管理」"), 303)
+		return
+	}
+	payload, summary, err := rulePayload(r)
+	if err != nil {
+		http.Redirect(w, r, "/account/rules?id="+strconv.FormatInt(id, 10)+"&flash="+urlq(err.Error()), 303)
+		return
+	}
+	ruleID := r.FormValue("rule_id")
+	var res *graph.CallResult
+	op := "create"
+	if ruleID == "" {
+		res, err = gc.CreateRule(r.Context(), payload)
+	} else {
+		op = "update"
+		res, err = gc.UpdateRule(r.Context(), ruleID, payload)
+	}
+	if err != nil || res == nil || res.StatusCode >= 300 {
+		detail := errString(err, res)
+		http.Redirect(w, r, "/account/rules?id="+strconv.FormatInt(id, 10)+"&flash="+urlq(
+			"保存失败: "+maskEmailsInText(detail)), 303)
+		return
+	}
+	s.afterRuleWrite(w, r, a, op, ruleID, r.FormValue("name"), summary)
+}
+
+func (s *Server) handleRuleToggle(w http.ResponseWriter, r *http.Request) {
+	s.ruleSimpleOp(w, r, "toggle", func(gc *graph.Client, ctx context.Context, rid, name, cur string) (*graph.CallResult, error) {
+		return gc.UpdateRule(ctx, rid, map[string]any{"isEnabled": cur != "true"})
+	})
+}
+
+func (s *Server) handleRuleDelete(w http.ResponseWriter, r *http.Request) {
+	s.ruleSimpleOp(w, r, "delete", func(gc *graph.Client, ctx context.Context, rid, name, cur string) (*graph.CallResult, error) {
+		return gc.DeleteRule(ctx, rid)
+	})
+}
+
+func (s *Server) ruleSimpleOp(w http.ResponseWriter, r *http.Request, op string,
+	call func(*graph.Client, context.Context, string, string, string) (*graph.CallResult, error)) {
+	if r.Method != http.MethodPost || !s.csrfCheck(r) {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	id, _ := strconv.ParseInt(r.FormValue("id"), 10, 64)
+	rid, name := r.FormValue("rule_id"), r.FormValue("rule_name")
+	a, gc, err := s.ruleGraphClient(r, id, msauth.RuleWriteScope)
+	if err != nil {
+		http.Redirect(w, r, "/account/rules?id="+strconv.FormatInt(id, 10)+"&flash="+urlq(
+			"缺少规则写权限——请重新授权并勾选「规则管理」"), 303)
+		return
+	}
+	res, err := call(gc, r.Context(), rid, name, r.FormValue("enabled"))
+	if err != nil || res == nil || res.StatusCode >= 300 {
+		http.Redirect(w, r, "/account/rules?id="+strconv.FormatInt(id, 10)+"&flash="+urlq(
+			op+" 失败: "+maskEmailsInText(errString(err, res))), 303)
+		return
+	}
+	detail := name
+	if op == "toggle" {
+		detail = name + " → enabled=" + map[bool]string{true: "false", false: "true"}[r.FormValue("enabled") == "true"]
+	}
+	s.afterRuleWrite(w, r, a, op, rid, name, detail)
+}
+
+func errString(err error, res *graph.CallResult) string {
+	if err != nil {
+		return err.Error()
+	}
+	if res != nil {
+		body := string(res.Body)
+		if len(body) > 200 {
+			body = body[:200]
+		}
+		return fmt.Sprintf("http %d: %s", res.StatusCode, body)
+	}
+	return "unknown"
+}
+
 func (s *Server) threshold(ctx context.Context) int {
 	_, _, t := s.sc.Params(ctx)
 	return t
@@ -790,6 +1066,9 @@ func (s *Server) handleTokenStart(w http.ResponseWriter, r *http.Request) {
 	scope := msauth.GraphScope
 	if r.FormValue("scope") == "full" {
 		scope = msauth.FullScope
+	}
+	if r.FormValue("manage") == "1" {
+		scope += " " + msauth.RuleWriteScope
 	}
 	dc, err := msauth.New().StartDeviceCode(r.Context(), cid, scope)
 	if err != nil {

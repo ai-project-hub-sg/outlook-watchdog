@@ -295,6 +295,47 @@ func (d *DB) GetRuleSnapshot(ctx context.Context, accountID int64) (rulesJSON, s
 	return rulesJSON, sha, err
 }
 
+// ---- rule_ops（规则管理写操作审计） ----
+
+// RuleOp 一次规则写操作记录。
+type RuleOp struct {
+	ID        int64
+	Op        string
+	RuleID    string
+	RuleName  string
+	Detail    string
+	CreatedAt string
+}
+
+// AddRuleOp 记录一次规则写操作。
+func (d *DB) AddRuleOp(ctx context.Context, accountID int64, op, ruleID, ruleName, detail string) error {
+	_, err := d.ExecContext(ctx,
+		`INSERT INTO rule_ops(account_id,op,rule_id,rule_name,detail,created_at)
+		 VALUES (?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
+		accountID, op, ruleID, ruleName, detail)
+	return err
+}
+
+// ListRuleOps 取账号最近规则操作（倒序）。
+func (d *DB) ListRuleOps(ctx context.Context, accountID int64, limit int) ([]RuleOp, error) {
+	rows, err := d.QueryContext(ctx,
+		`SELECT id,op,rule_id,rule_name,detail,created_at FROM rule_ops
+		 WHERE account_id=? ORDER BY id DESC LIMIT ?`, accountID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RuleOp
+	for rows.Next() {
+		var o RuleOp
+		if err := rows.Scan(&o.ID, &o.Op, &o.RuleID, &o.RuleName, &o.Detail, &o.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
 // ---- check_runs / check_results ----
 
 // StartRun 开启一次检查运行，返回 run 主键 id。

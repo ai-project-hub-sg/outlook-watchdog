@@ -27,8 +27,8 @@ type Scheduler struct {
 	OnRound   func(a *store.Account, status string, err error) // 日志钩子
 
 	mu        sync.Mutex
-	lastRound time.Time // 上次轮次完成时间（零值=未跑过）
-	nextRound time.Time // 下轮计划时间（零值=Loop 未启动）
+	lastRound time.Time           // 上次轮次完成时间（零值=未跑过）
+	nextRound time.Time           // 下轮计划时间（零值=Loop 未启动）
 	lastSlot  map[int64]time.Time // 每账号上次运行的周期槽起点（防同槽重跑）
 }
 

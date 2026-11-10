@@ -91,6 +91,49 @@ func (c *Client) MessageRules(ctx context.Context) ([]classify.MessageRule, int,
 	return payload.Value, res.StatusCode, nil
 }
 
+// mutate 通用写调用（POST/PATCH/DELETE）；payload 为 nil 时无 body。
+func (c *Client) mutate(ctx context.Context, method, path string, payload any) (*CallResult, error) {
+	base := c.Base
+	if base == "" {
+		base = baseURL
+	}
+	var body io.Reader
+	if payload != nil {
+		b, _ := json.Marshal(payload)
+		body = strings.NewReader(string(b))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, base+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return &CallResult{StatusCode: resp.StatusCode, Body: rbody}, nil
+}
+
+// CreateRule POST 新建收件箱规则，payload 为 Graph messageRule 结构。
+func (c *Client) CreateRule(ctx context.Context, payload map[string]any) (*CallResult, error) {
+	return c.mutate(ctx, http.MethodPost, "/me/mailFolders/inbox/messageRules", payload)
+}
+
+// UpdateRule PATCH 更新规则（只传需改字段，如 isEnabled）。
+func (c *Client) UpdateRule(ctx context.Context, id string, payload map[string]any) (*CallResult, error) {
+	return c.mutate(ctx, http.MethodPatch, "/me/mailFolders/inbox/messageRules/"+id, payload)
+}
+
+// DeleteRule 删除指定规则。
+func (c *Client) DeleteRule(ctx context.Context, id string) (*CallResult, error) {
+	return c.mutate(ctx, http.MethodDelete, "/me/mailFolders/inbox/messageRules/"+id, nil)
+}
+
 // SendMail 调 POST /me/sendMail（可选检查，默认关闭）。
 func (c *Client) SendMail(ctx context.Context, to, subject, body string) (*CallResult, error) {
 	payload := map[string]any{
