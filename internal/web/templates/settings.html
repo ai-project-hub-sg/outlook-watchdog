@@ -15,6 +15,29 @@
 <button>保存</button>
 </form>
 
+<h2>显示时区（仅影响本浏览器的时间展示，存储与调度仍用 UTC）</h2>
+<form method="post" action="/settings/tz" class="card">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<div class="grid3">
+<label>时区
+<select name="tz">
+<option value="UTC" {{if eq .TZName "UTC"}}selected{{end}}>UTC</option>
+<option value="Asia/Shanghai" {{if eq .TZName "Asia/Shanghai"}}selected{{end}}>Asia/Shanghai (UTC+8)</option>
+<option value="Asia/Tokyo" {{if eq .TZName "Asia/Tokyo"}}selected{{end}}>Asia/Tokyo (UTC+9)</option>
+<option value="Asia/Singapore" {{if eq .TZName "Asia/Singapore"}}selected{{end}}>Asia/Singapore (UTC+8)</option>
+<option value="Europe/London" {{if eq .TZName "Europe/London"}}selected{{end}}>Europe/London</option>
+<option value="Europe/Berlin" {{if eq .TZName "Europe/Berlin"}}selected{{end}}>Europe/Berlin</option>
+<option value="America/New_York" {{if eq .TZName "America/New_York"}}selected{{end}}>America/New_York</option>
+<option value="America/Chicago" {{if eq .TZName "America/Chicago"}}selected{{end}}>America/Chicago</option>
+<option value="America/Los_Angeles" {{if eq .TZName "America/Los_Angeles"}}selected{{end}}>America/Los_Angeles</option>
+<option value="Australia/Sydney" {{if eq .TZName "Australia/Sydney"}}selected{{end}}>Australia/Sydney</option>
+</select></label>
+<label>当前生效 <input value="{{.TZName}}" disabled></label>
+</div>
+<button>保存</button>
+<p class="dim">浏览器首访会自动探测并写入时区 cookie；此处可手动覆盖。时区偏好存 cookie，换浏览器需重设。</p>
+</form>
+
 <h2>管理员密码</h2>
 <form method="post" action="/settings/password" class="card">
 <input type="hidden" name="csrf" value="{{.CSRF}}">

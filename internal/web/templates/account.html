@@ -7,7 +7,7 @@
 <div class="cards">
 <div class="stat"><b class="badge {{badge .Data.State.Status}}">{{.Data.State.Status}}</b><span>当前状态</span></div>
 <div class="stat"><b>{{.Data.State.ConsecutiveFail}}</b><span>连续失败</span></div>
-<div class="stat"><b>{{.Data.State.LastCheckAt}}</b><span>上次检查(UTC)</span></div>
+<div class="stat"><b>{{$.TZ .Data.State.LastCheckAt}}</b><span>上次检查</span></div>
 <div class="stat"><b class="mono small">{{if .Data.BaselineSHA}}{{.Data.BaselineSHA}}{{else}}未建立{{end}}</b><span>规则基线 SHA</span></div>
 </div>
 
@@ -86,7 +86,7 @@ async function raPoll(){
 <h3>检查历史</h3>
 {{range .Data.Runs}}
 <details class="run">
-<summary><span class="dim">{{.StartedAt}}</span> {{if .Status}}<span class="badge {{badge .Status}}">{{.Status}}</span>{{else}}<span class="badge badge-warn">运行中…</span>{{end}} <span class="dim">source={{.Source}}</span></summary>
+<summary><span class="dim">{{$.TZ .StartedAt}}</span> {{if .Status}}<span class="badge {{badge .Status}}">{{.Status}}</span>{{else}}<span class="badge badge-warn">运行中…</span>{{end}} <span class="dim">source={{.Source}}</span></summary>
 <table>
 <tr><th>检查项</th><th>结果</th><th>分类</th><th>详情</th><th>耗时</th></tr>
 {{range .Results}}

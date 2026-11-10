@@ -4,6 +4,8 @@
 <title>{{.Title}} · outlook-watchdog</title>
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/htmx.min.js" defer></script>
+<script>/* 首访自动写入浏览器时区 cookie（无 cookie 才写，不刷新页面） */
+if(!/(^|;)\s*tz=/.test(document.cookie)){try{var z=Intl.DateTimeFormat().resolvedOptions().timeZone;if(z)document.cookie='tz='+encodeURIComponent(z)+';path=/;max-age=31536000;SameSite=Lax'}catch(e){}}</script>
 </head>{{end}}
 
 {{define "nav"}}<nav class="nav">
@@ -14,6 +16,7 @@
 <a href="/channels" class="{{if eq .Path "/channels"}}on{{end}}">通道</a>
 <a href="/settings" class="{{if eq .Path "/settings"}}on{{end}}">设置</a>
 <span class="grow"></span>
+<span class="dim" title="页面时间按此时区展示（设置页可改）">{{.TZName}}</span>
 <span class="dim">v{{.Version}}</span>
 <a href="/logout">退出</a>
 </nav>

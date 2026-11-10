@@ -70,9 +70,9 @@
 
 <h3>操作审计（近 30 条）</h3>
 <table>
-<tr><th>时间(UTC)</th><th>操作</th><th>规则</th><th>详情</th></tr>
+<tr><th>时间</th><th>操作</th><th>规则</th><th>详情</th></tr>
 {{range .Data.Ops}}
-<tr><td class="dim mono">{{.CreatedAt}}</td><td>{{.Op}}</td><td>{{.RuleName}}</td><td class="dim">{{.Detail}}</td></tr>
+<tr><td class="dim mono">{{$.TZ .CreatedAt}}</td><td>{{.Op}}</td><td>{{.RuleName}}</td><td class="dim">{{.Detail}}</td></tr>
 {{else}}<tr><td colspan="4" class="dim">暂无写操作</td></tr>
 {{end}}
 </table>

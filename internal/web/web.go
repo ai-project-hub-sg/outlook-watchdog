@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	_ "time/tzdata" // Windows 无系统 zoneinfo，内嵌 IANA 时区库
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -120,6 +121,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/alerts", s.requireAuth(s.pageAlerts))
 	s.mux.HandleFunc("/settings", s.requireAuth(s.pageSettings))
 	s.mux.HandleFunc("/settings/save", s.requireAuth(s.handleSaveSettings))
+	s.mux.HandleFunc("/settings/tz", s.requireAuth(s.handleSetTZ))
 	s.mux.HandleFunc("/settings/password", s.requireAuth(s.handleChangePassword))
 	s.mux.HandleFunc("/channels", s.requireAuth(s.pageChannels))
 	s.mux.HandleFunc("/channels/add", s.requireAuth(s.handleAddChannel))
@@ -226,13 +228,41 @@ type pageData struct {
 	Flash   string
 	Data    any
 	Version string
+	TZ      func(string) string // UTC 存储时间 → 浏览者所选时区
+	TZName  string
+}
+
+// tzLoc 读取 tz cookie 中的 IANA 时区（默认 UTC；浏览器首访自动写入）。
+func tzLoc(r *http.Request) *time.Location {
+	name := "UTC"
+	if c, err := r.Cookie("tz"); err == nil && c.Value != "" {
+		name = c.Value
+	}
+	if loc, err := time.LoadLocation(name); err == nil {
+		return loc
+	}
+	return time.UTC
+}
+
+var timeInFormats = []string{
+	time.RFC3339, "2006-01-02T15:04:05Z", "2006-01-02 15:04:05Z", "2006-01-02 15:04:05",
 }
 
 func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, data any) {
 	if data == nil {
 		data = map[string]any{}
 	}
-	pd := pageData{Title: name, CSRF: s.csrfOf(r), Path: r.URL.Path, Data: data, Version: s.version}
+	loc := tzLoc(r)
+	tzf := func(s string) string {
+		for _, f := range timeInFormats {
+			if t, err := time.Parse(f, s); err == nil {
+				return t.In(loc).Format("01-02 15:04:05 MST")
+			}
+		}
+		return s
+	}
+	pd := pageData{Title: name, CSRF: s.csrfOf(r), Path: r.URL.Path, Data: data,
+		Version: s.version, TZ: tzf, TZName: loc.String()}
 	if f := r.URL.Query().Get("flash"); f != "" {
 		pd.Flash = f
 	}
@@ -908,11 +938,12 @@ func (s *Server) pageSettings(w http.ResponseWriter, r *http.Request) {
 	iv, jt, th := s.sc.Params(r.Context())
 	cid, _ := s.db.GetSetting(r.Context(), "app.client_id")
 	last, next := s.sc.RoundInfo()
+	loc := tzLoc(r)
 	fmtT := func(t time.Time) string {
 		if t.IsZero() {
 			return "—"
 		}
-		return t.UTC().Format("2006-01-02 15:04:05Z")
+		return t.In(loc).Format("2006-01-02 15:04:05 MST")
 	}
 	s.render(w, r, "settings", map[string]any{
 		"IntervalMin": iv, "Jitter": jt, "Threshold": th,
@@ -920,6 +951,25 @@ func (s *Server) pageSettings(w http.ResponseWriter, r *http.Request) {
 		"Uptime":    time.Since(s.started).Round(time.Second).String(),
 		"LastRound": fmtT(last), "NextRound": fmtT(next),
 	})
+}
+
+// handleSetTZ 存浏览器时区 cookie（展示偏好，不入库）。
+func (s *Server) handleSetTZ(w http.ResponseWriter, r *http.Request) {
+	if !s.csrfCheck(r) {
+		http.Error(w, "CSRF", 403)
+		return
+	}
+	name := r.FormValue("tz")
+	if _, err := time.LoadLocation(name); err != nil {
+		name = "UTC"
+	}
+	http.SetCookie(w, &http.Cookie{Name: "tz", Value: name, Path: "/",
+		MaxAge: 365 * 24 * 3600, SameSite: http.SameSiteLaxMode})
+	ref := r.Referer()
+	if ref == "" {
+		ref = "/settings"
+	}
+	http.Redirect(w, r, ref, 303)
 }
 
 func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {

@@ -142,6 +142,32 @@ func TestRuleOpsGuards(t *testing.T) {
 	}
 }
 
+// TestTZCookie：tz cookie 控制页面时区——nav 显示区域名，时间字段转换。
+func TestTZCookie(t *testing.T) {
+	s, db := newTestServer(t)
+	cookie := loginSession(t, s, db)
+	req := httptest.NewRequest("GET", "/accounts", nil)
+	req.AddCookie(cookie)
+	req.AddCookie(&http.Cookie{Name: "tz", Value: "Asia/Shanghai"})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, "Asia/Shanghai") {
+		t.Fatalf("nav 未显示所选时区: code=%d", rec.Code)
+	}
+	// 无 cookie 时回落 UTC
+	req2 := httptest.NewRequest("GET", "/accounts", nil)
+	req2.AddCookie(cookie)
+	rec2 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec2, req2)
+	if !strings.Contains(rec2.Body.String(), ">UTC<") {
+		t.Fatal("缺省应显示 UTC")
+	}
+	if got := tzLoc(httptest.NewRequest("GET", "/", nil)).String(); got != "UTC" {
+		t.Fatalf("tzLoc 默认应为 UTC，得到 %s", got)
+	}
+}
+
 func TestMaskEmailsInText(t *testing.T) {
 	got := maskEmailsInText("fwd=attacker@evil.com; 通知 admin@corp.io")
 	if strings.Contains(got, "attacker@") || strings.Contains(got, "admin@") {
