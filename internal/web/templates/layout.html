@@ -4,8 +4,8 @@
 <title>{{.Title}} · outlook-watchdog</title>
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/htmx.min.js" defer></script>
-<script>/* 首访自动写入浏览器时区 cookie（无 cookie 才写，不刷新页面） */
-if(!/(^|;)\s*tz=/.test(document.cookie)){try{var z=Intl.DateTimeFormat().resolvedOptions().timeZone;if(z)document.cookie='tz='+encodeURIComponent(z)+';path=/;max-age=31536000;SameSite=Lax'}catch(e){}}</script>
+<script>/* 首访自动写入浏览器时区 cookie 并刷新一次（服务端按 cookie 渲染） */
+if(!/(^|;)\s*tz=/.test(document.cookie)){try{var z=Intl.DateTimeFormat().resolvedOptions().timeZone;if(z){document.cookie='tz='+encodeURIComponent(z)+';path=/;max-age=31536000;SameSite=Lax';location.reload()}}catch(e){}}</script>
 </head>{{end}}
 
 {{define "nav"}}<nav class="nav">

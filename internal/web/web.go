@@ -228,8 +228,18 @@ type pageData struct {
 	Flash   string
 	Data    any
 	Version string
-	TZ      func(string) string // UTC 存储时间 → 浏览者所选时区
 	TZName  string
+	tz      *time.Location // 模板方法 TZ 使用
+}
+
+// TZ UTC 存储时间 → 浏览者所选时区（模板：{{$.TZ .StartedAt}}）。
+func (pd pageData) TZ(s string) string {
+	for _, f := range timeInFormats {
+		if t, err := time.Parse(f, s); err == nil {
+			return t.In(pd.tz).Format("01-02 15:04:05 MST")
+		}
+	}
+	return s
 }
 
 // tzLoc 读取 tz cookie 中的 IANA 时区（默认 UTC；浏览器首访自动写入）。
@@ -253,16 +263,8 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 		data = map[string]any{}
 	}
 	loc := tzLoc(r)
-	tzf := func(s string) string {
-		for _, f := range timeInFormats {
-			if t, err := time.Parse(f, s); err == nil {
-				return t.In(loc).Format("01-02 15:04:05 MST")
-			}
-		}
-		return s
-	}
 	pd := pageData{Title: name, CSRF: s.csrfOf(r), Path: r.URL.Path, Data: data,
-		Version: s.version, TZ: tzf, TZName: loc.String()}
+		Version: s.version, TZName: loc.String(), tz: loc}
 	if f := r.URL.Query().Get("flash"); f != "" {
 		pd.Flash = f
 	}
