@@ -1095,7 +1095,7 @@ func (s *Server) handleTokenStart(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		rt, err := msauth.New().PollDeviceCode(context.Background(), cid, dc.DeviceCode, dc.Interval)
 		if err != nil && strings.Contains(err.Error(), "invalid_scope") {
-			err = fmt.Errorf("invalid_scope：该 client_id 应用未注册协议权限——自建 Entra 应用并加 Office 365 Exchange Online 的 IMAP.AccessAsUser.All+SMTP.Send，或改用「标准」授权")
+			err = fmt.Errorf("invalid_scope：所选范围不被该 client_id 应用接受——「完整」档的 IMAP/SMTP 仅 Graph PowerShell 公共 client（14d82eec-…）或声明了 EXO 权限的自建应用可签；规则管理/常规检查选「标准」档即可")
 		}
 		if err == nil {
 			// 授权成功：识别实际绑定的账号（device flow 签给浏览器会话里的

@@ -22,8 +22,9 @@
 <div class="card">
 <label class="dim">授权范围
 <select id="ra_scope">
-<option value="full" selected>完整（Graph + IMAP/SMTP 协议探测）</option>
-<option value="graph">标准（仅 Graph 检查）</option>
+<option value="graph" selected>标准（Graph 检查，推荐）</option>
+<option value="full">完整（+ IMAP/SMTP 协议探测，需支持 EXO 的 client）</option>
+
 </select></label>
 <label class="dim"><input type="checkbox" id="ra_manage"> 附加规则管理权限（增删改收件规则）</label>
 <button type="button" onclick="raStart()">发起重新授权</button>
